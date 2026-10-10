@@ -97,6 +97,9 @@ These are cheap now and painful to add later.
   so a late correct answer still earns something. To be tuned during playtesting.
 - **Timing fairness:** clients download the clip during the countdown and confirm they're
   ready; playback starts together, and timing is measured from the round start.
+- **Round end:** a round ends when every player has answered or the timer runs out,
+  whichever comes first. On each guess the server checks whether everyone has answered
+  and, if so, moves straight to `REVEAL`.
 
 ---
 
@@ -116,6 +119,19 @@ Spotify is not an option: it stopped providing preview URLs to new apps in late 
 
 The plan is to use **Deezer, accessed through our server**, for its playlists, with iTunes
 as an alternative behind the same provider interface.
+
+### Snippets and randomization
+
+- Each song has **one fixed preview** per service. Requesting it again returns the same
+  audio (verified for both Deezer and iTunes).
+- For variety, the **server picks a random start offset** inside the ~30 s preview (e.g.
+  0–25 s for a 5 s snippet) and sends it with the round, so every player hears the same
+  part.
+- **Full songs are out of scope.** The options are Spotify or Apple Music SDKs (every
+  player needs a subscription), YouTube embeds (unreliable, and the title spoils the
+  answer) or our own files (not allowed for a public release). If wanted for private games
+  later, a "local library" provider can be added behind the same provider interface
+  without changing the engine.
 
 ---
 
