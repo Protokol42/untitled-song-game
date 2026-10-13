@@ -17,14 +17,22 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
 ## Stack
 
 - Client: HTML, CSS, vanilla JavaScript
-- Server: Python (FastAPI + WebSockets), not built yet
+- Server: Python (FastAPI + Uvicorn + httpx). WebSockets not built yet
+- Python setup: one virtual environment at the project root (`.venv/`, git-ignored),
+  dependencies pinned in the root `requirements.txt` (`pip freeze`)
 - Throwaway tests go in `experiments/`
 
 ## Current status
 
-- Roadmap step 1 (song-source test) is in progress.
-  - Part 1: iTunes Search API called directly from a single HTML page. Written in
-    `experiments/song-source/`; the owner is reading and running it.
-  - Part 2: Deezer through a small Python server (Deezer blocks browser calls via CORS).
-- Collaboration: Claude writes small, well-commented pieces; the owner reads and runs them.
+- Roadmap step 1 (song-source test) is **done**.
+  - Part 1 (iTunes, called directly from the browser) worked and was then deleted.
+  - Part 2 lives in `experiments/song-source-deezer/`: a FastAPI server with
+    `GET /api/search?q=...` that calls Deezer and returns our own `Track` model, and
+    also serves the page from `static/`, so page and API share one origin (no CORS).
+    Run from the root: `uvicorn server:app --reload --app-dir experiments/song-source-deezer`
+- Next: roadmap step 2 (single-player). Open question: where tracks come from, since
+  the roadmap said "all in the browser" but Deezer needs our server.
+- Collaboration: present the plan and wait for the owner's go-ahead before writing code
+  or installing anything. Then Claude writes small, well-commented pieces; the owner
+  reads and runs them.
 - Don't commit or push without asking first.

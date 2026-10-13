@@ -2,18 +2,21 @@ const SNIPPET_SECONDS = 5;
 
 const player = document.getElementById("player");
 
-// Ask iTunes for songs matching the search term and return an array of tracks.
-// `async` lets us use `await`, which pauses this function until the network
-// request finishes without freezing the page.
+// Ask OUR server for songs matching the search term. It calls Deezer for us and
+// returns a list of our own tracks: { id, title, artist, preview_url }.
+//
+// The URL has no "https://host" part, so the browser sends it to the same
+// origin the page came from (localhost:8000). Same origin means no CORS check.
 async function search(term) {
-  // encodeURIComponent turns spaces and symbols into URL-safe text,
-  // e.g. "don't stop" becomes "don't%20stop".
-  const url = "https://itunes.apple.com/search?entity=song&limit=10&term="
-    + encodeURIComponent(term);
+  const url = "/api/search?q=" + encodeURIComponent(term);
 
-  const response = await fetch(url);     // 1. Send the HTTP request
-  const data = await response.json();    // 2. Parse the body as JSON
-  return data.results;                   // 3. The tracks live in "results"
+  const response = await fetch(url);
+  // fetch() only throws when the network fails. An error status like 422 or
+  // 502 still counts as a "successful" fetch, so check response.ok ourselves.
+  if (!response.ok) {
+    throw new Error("Search failed: HTTP " + response.status);
+  }
+  return await response.json(); // Already a plain array of our tracks
 }
 
 // Play SNIPPET_SECONDS of a preview, starting at a random point inside it.
@@ -54,6 +57,7 @@ function playSnippet(previewUrl) {
 }
 
 // Build one list item per track: a Play button plus "Title — Artist".
+// The field names are ours (title, artist, preview_url), not Deezer's.
 function showResults(tracks) {
   const list = document.getElementById("results");
   list.innerHTML = ""; // Clear results from any previous search
@@ -62,16 +66,23 @@ function showResults(tracks) {
     const item = document.createElement("li");
     const button = document.createElement("button");
     button.textContent = "Play " + SNIPPET_SECONDS + "s";
-    button.addEventListener("click", () => playSnippet(track.previewUrl));
+    button.addEventListener("click", () => playSnippet(track.preview_url));
 
-    item.append(button, " " + track.trackName + " — " + track.artistName);
+    item.append(button, " " + track.title + " — " + track.artist);
     list.appendChild(item);
   }
 }
 
 document.getElementById("search").addEventListener("click", async () => {
   const term = document.getElementById("query").value;
-  const tracks = await search(term);
-  console.log(tracks); // Inspect the full track objects in DevTools
-  showResults(tracks);
+  // try/catch: if search() throws (see the response.ok check), show the error
+  // instead of failing silently.
+  try {
+    const tracks = await search(term);
+    console.log(tracks); // Inspect our simplified tracks in DevTools
+    showResults(tracks);
+  } catch (error) {
+    console.error(error);
+    alert(error.message);
+  }
 });

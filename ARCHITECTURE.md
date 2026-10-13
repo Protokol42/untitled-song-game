@@ -120,6 +120,14 @@ Spotify is not an option: it stopped providing preview URLs to new apps in late 
 The plan is to use **Deezer, accessed through our server**, for its playlists, with iTunes
 as an alternative behind the same provider interface.
 
+**Confirmed in the song-source test:** a FastAPI endpoint calls Deezer with `httpx`
+(async, so waiting on Deezer doesn't block other requests), converts each result into our
+`Track` model and returns it as JSON. The same server also serves the page, so page and
+API share one origin and CORS never applies. The audio itself streams straight from
+Deezer's CDN: `<audio>` may play media from any origin, since CORS only stops scripts
+from reading responses. Deezer sometimes answers `200` with `{"error": …}` in the body,
+so success is checked by the presence of `data`, not only the status code.
+
 ### Snippets and randomization
 
 - Each song has **one fixed preview** per service. Requesting it again returns the same
@@ -137,8 +145,9 @@ as an alternative behind the same provider interface.
 
 ## Roadmap
 
-1. **Song-source test** (`experiments/`): fetch tracks and play a clip in the browser.
-   First iTunes directly, then Deezer through a small Python server.
+1. ✅ **Song-source test** (`experiments/song-source-deezer/`): fetch tracks and play a
+   clip in the browser. iTunes worked directly from the browser; Deezer works through a
+   small FastAPI server.
 2. **Single-player version, all in the browser:** clip plays, pick from 4 choices, get a
    score, next round. Confirms the game is fun before adding networking.
 3. **Multiplayer:** a FastAPI server with rooms, a lobby, the state machine and scores sent
