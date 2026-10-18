@@ -18,8 +18,9 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
 
 - Client: HTML, CSS, vanilla JavaScript
 - Server: Python (FastAPI + Uvicorn + httpx). WebSockets not built yet
-- Python setup: one virtual environment at the project root (`.venv/`, git-ignored),
-  dependencies pinned in the root `requirements.txt` (`pip freeze`)
+- Python setup: Python 3.14 (pinned in `.python-version`, which Render also reads), one
+  virtual environment at the project root (`.venv/`, git-ignored), dependencies pinned in
+  the root `requirements.txt` (`pip freeze`)
 - Throwaway tests go in `experiments/`
 
 ## Current status
