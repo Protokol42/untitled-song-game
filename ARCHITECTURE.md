@@ -93,13 +93,24 @@ These are cheap now and painful to add later.
 
 - **Answer format:** multiple choice (e.g. 4 options). Fairer to score than typed
   answers, which would need fuzzy matching.
-- **Scoring (starting point):** `correct ? max(100, 1000 × (1 − elapsed / roundLength)) : 0`,
+- **Scoring (starting point):** `correct ? max(100, 1000 × (1 − elapsed / clipSeconds)) : 0`,
   so a late correct answer still earns something. To be tuned during playtesting.
+- **Round length = clip length:** you answer while the clip plays; when it ends, time's up.
+  The clock starts when the audio actually starts playing, and the answer buttons stay
+  disabled until then, so loading time neither eats into the round nor allows blind
+  guesses for full points.
 - **Timing fairness:** clients download the clip during the countdown and confirm they're
   ready; playback starts together, and timing is measured from the round start.
 - **Round end:** a round ends when every player has answered or the timer runs out,
   whichever comes first. On each guess the server checks whether everyone has answered
   and, if so, moves straight to `REVEAL`.
+- **Next round:** in multiplayer, `REVEAL` lasts a set time (`revealSeconds` in the config)
+  and the server then moves everyone to the next round together; no "Next" button. The
+  single-player version (roadmap step 2) uses a button for now.
+- **Autoplay:** browsers only allow audio after the user has interacted with the page.
+  Chrome and Firefox remember one earlier click, so timed rounds can start on their own;
+  Safari tends to allow only the same `<audio>` element that was first played after a
+  click. So the client uses **one shared `<audio>` element** for the whole game.
 
 ---
 
@@ -111,7 +122,7 @@ Findings from testing the APIs (October 2026):
 |---|---|---|
 | Preview clips | ~30 s `.m4a` (`previewUrl`) | ~30 s `.mp3` (`preview`) |
 | Callable directly from the browser (CORS) | Yes (`access-control-allow-origin: *`) | **No.** Must be called from our server. |
-| Preview URLs expire | No (as observed) | **Yes** (signed `hdnea=exp=…` token) |
+| Preview URLs expire | No (as observed) | **Yes**, 15 minutes after fetching (signed `hdnea=exp=…` token) |
 | Playlists / charts | Search only | Yes. Useful for themed games. |
 | Auth required | No | No (for search and lookups) |
 

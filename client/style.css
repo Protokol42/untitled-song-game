@@ -1,0 +1,335 @@
+/* ---------------------------------------------------------------------------
+   Colours and sizes. Change the look here; everything below uses these.
+   `--name: value` defines a CSS variable; `var(--name)` reads it.
+   --------------------------------------------------------------------------- */
+
+:root {
+  --bg: #121216;           /* Page background */
+  --surface: #1f1f27;      /* Buttons, sidebar, bar background */
+  --surface-hover: #2b2b36;
+  --text: #f2f2f5;
+  --muted: #9b9bab;        /* Less important text */
+  --accent: #8b5cf6;       /* Main buttons, timer, focus outline */
+  --correct: #22c55e;
+  --wrong: #ef4444;
+  --radius: 12px;
+
+  /* Tells the browser the page is dark, so built-in bits (scrollbars,
+     form controls) are drawn dark too. */
+  color-scheme: dark;
+}
+
+/* ---------------------------------------------------------------------------
+   Basics
+   --------------------------------------------------------------------------- */
+
+/* By default an element's width doesn't include its padding and border, so
+   `width: 100%` plus padding overflows. border-box makes width include them. */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0; /* Browsers add 8px by default */
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, sans-serif; /* The operating system's own font */
+}
+
+#app {
+  /* At least the screen's height (taller if the content needs it, e.g. a long
+     results list). 100vh on phones ignores the browser's address bar, so the
+     bottom gets hidden under it; 100dvh ("dynamic") fixes that. Browsers that
+     don't know dvh ignore the second line and keep the first. */
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 16px;
+}
+
+h1,
+p {
+  margin: 0; /* Spacing comes from `gap` on the layouts instead */
+}
+
+/* ---------------------------------------------------------------------------
+   Buttons
+   --------------------------------------------------------------------------- */
+
+button {
+  font: inherit; /* Buttons don't inherit the page font by default */
+  color: var(--text);
+  background: var(--surface);
+  border: none;
+  border-radius: var(--radius);
+  padding: 12px 24px;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.05s; /* Animate these changes */
+}
+
+/* :hover = mouse over it; :active = being pressed. :not(:disabled) so greyed
+   out buttons don't react. */
+button:hover:not(:disabled) {
+  background: var(--surface-hover);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+/* An outline when reached with the keyboard (Tab). :focus-visible, unlike
+   :focus, doesn't show it after a mouse click. */
+button:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+button:disabled {
+  cursor: default;
+}
+
+/* Start, Next, Play again */
+button.primary {
+  background: var(--accent);
+  font-weight: 700;
+}
+
+button.primary:hover {
+  background: #7c4ae8;
+}
+
+/* ---------------------------------------------------------------------------
+   Centred layout: START, LOADING, RESULTS
+   Flexbox lines items up in one direction (here: a column), centred.
+   --------------------------------------------------------------------------- */
+
+.layout-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;     /* Centre horizontally */
+  justify-content: center; /* Centre vertically */
+  gap: 20px;               /* Space between items */
+  text-align: center;
+}
+
+h1 {
+  font-size: 2.5rem; /* rem = times the page's base font size (usually 16px) */
+}
+
+.message {
+  color: var(--muted);
+  font-size: 1.25rem;
+}
+
+.error {
+  color: var(--wrong);
+}
+
+.final-score {
+  font-size: 3rem;
+  font-weight: 800;
+}
+
+.results {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: min(32rem, 100%); /* 32rem wide, but never wider than the screen */
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.results li {
+  display: flex;
+  justify-content: space-between; /* Title left, result right */
+  gap: 16px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  text-align: left;
+}
+
+/* The result ("+740 (2.6 s)", "✗ wrong") stays on one line; a long title
+   wraps instead. */
+.results li span:last-child {
+  white-space: nowrap;
+}
+
+/* ---------------------------------------------------------------------------
+   Round layout: PLAYING and REVEAL
+   CSS Grid places items in rows AND columns at once. grid-template-areas
+   draws the layout as a little map; each child says which area it goes in.
+   --------------------------------------------------------------------------- */
+
+.layout-round {
+  display: grid;
+  /* An empty 14rem column on the left balances the 14rem sidebar on the right,
+     so the stage (1fr = the rest) sits in the true middle of the screen. */
+  grid-template-columns: 14rem 1fr 14rem;
+  grid-template-rows: 1fr auto; /* Top takes the rest; bottom fits its content */
+  grid-template-areas:
+    ".      stage  sidebar"
+    "bottom bottom bottom";  /* "." = an empty cell */
+  gap: 16px;
+}
+
+/* Round number and messages, centred, starting about a quarter of the way down. */
+.stage {
+  grid-area: stage;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding-top: 18dvh;
+  text-align: center;
+}
+
+.round-counter {
+  font-size: 2.25rem;
+  font-weight: 800;
+}
+
+.verdict {
+  font-size: 1.75rem;
+  font-weight: 700;
+}
+
+.verdict.correct {
+  color: var(--correct);
+}
+
+.verdict.wrong {
+  color: var(--wrong);
+}
+
+/* Scores, top right */
+.sidebar {
+  grid-area: sidebar;
+  align-self: start; /* Only as tall as its content, not the whole row */
+  padding: 16px;
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+
+.sidebar h2 {
+  margin: 0 0 8px;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.players {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.players li {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+/* Timer and choices, along the bottom */
+.bottom {
+  grid-area: bottom;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.timebar {
+  height: 8px;
+  background: var(--surface);
+  border-radius: 999px; /* Fully rounded ends */
+  overflow: hidden;     /* Clip the fill to the rounded shape */
+}
+
+.timebar-fill {
+  height: 100%;
+  background: var(--accent);
+  /* Its width is animated from script.js (timeBar) */
+}
+
+/* Choices in a 2-column grid; rows are added as needed. */
+.choices {
+  display: grid;
+  grid-template-columns: 1fr 1fr; /* Two equal columns */
+  gap: 12px;
+}
+
+.choice {
+  min-height: 4.5rem;
+  font-size: 1.15rem;
+  font-weight: 600;
+  overflow-wrap: anywhere; /* Long titles wrap instead of overflowing */
+}
+
+/* With an odd number of choices, the last one is alone in its row: let it
+   span both columns. :nth-child(odd) = 1st, 3rd, 5th... child; combined with
+   :last-child it only matches when the LAST one is in an odd position. */
+.choice:last-child:nth-child(odd) {
+  grid-column: 1 / -1; /* From the first column line to the last */
+}
+
+/* Greyed out: while the clip loads, and on REVEAL for the choices that
+   weren't the answer or your pick. */
+.choice:disabled {
+  opacity: 0.45;
+}
+
+/* REVEAL colours. These come after .choice:disabled and are equally specific,
+   so they win and stay at full opacity. */
+.choice.correct {
+  opacity: 1;
+  background: var(--correct);
+  color: #0b0b0f;
+}
+
+.choice.wrong {
+  opacity: 1;
+  background: var(--wrong);
+}
+
+/* ---------------------------------------------------------------------------
+   Narrow screens (phones, portrait tablets): sidebar becomes a slim strip on
+   top. Below ~800px, two 14rem side columns would squeeze the stage so much
+   that "Round 2 / 5" breaks onto two lines.
+   A media query applies its rules only when the condition is true.
+   --------------------------------------------------------------------------- */
+
+@media (max-width: 800px) {
+  .layout-round {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr auto;
+    grid-template-areas:
+      "sidebar"
+      "stage"
+      "bottom";
+  }
+
+  .stage {
+    padding-top: 8dvh;
+  }
+
+  .sidebar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 8px 16px;
+  }
+
+  .sidebar h2 {
+    margin: 0;
+  }
+
+  .players {
+    flex: 1; /* Take the rest of the strip */
+  }
+
+  .choice {
+    min-height: 4rem;
+    font-size: 1rem;
+  }
+}

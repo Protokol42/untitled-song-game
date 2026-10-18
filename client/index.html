@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <!-- Without this, phones pretend to be a ~980px-wide desktop screen and
+         shrink the whole page down. This says "use the real screen width". -->
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Guess the Song</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="module" src="script.js"></script>
+  </head>
+  <body>
+    <!-- Everything visible is drawn here by render() in script.js.
+         This file never changes between screens. -->
+    <div id="app"></div>
+
+    <!-- One shared audio player for the whole game. It's outside #app so that
+         render() never destroys it, and it has no "controls" attribute, so it's
+         invisible; script.js drives it. -->
+    <audio id="player"></audio>
+  </body>
+</html>
