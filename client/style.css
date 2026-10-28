@@ -98,7 +98,35 @@ button.primary:hover {
 }
 
 /* ---------------------------------------------------------------------------
-   Centred layout: START, LOADING, RESULTS
+   Text fields
+   --------------------------------------------------------------------------- */
+
+input {
+  font: inherit; /* Like buttons, inputs don't inherit the page font */
+  color: var(--text);
+  background: var(--surface);
+  /* A transparent border that only gets a colour on focus, so focusing
+     doesn't make the field 2px bigger and shift everything around it. */
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  padding: 12px 16px;
+}
+
+input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+input::placeholder {
+  color: var(--muted);
+}
+
+input:disabled {
+  opacity: 0.6;
+}
+
+/* ---------------------------------------------------------------------------
+   Centred layout: HOME, LOBBY, LOADING, RESULTS
    Flexbox lines items up in one direction (here: a column), centred.
    --------------------------------------------------------------------------- */
 
@@ -153,6 +181,84 @@ h1 {
    wraps instead. */
 .results li span:last-child {
   white-space: nowrap;
+}
+
+/* --- HOME --- */
+
+/* Name, Create, "or join", code + Join, stacked. In a flex column, children
+   stretch to the full width by default, so every field and button lines up. */
+.home-form {
+  width: min(22rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.divider {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-top: 8px;
+}
+
+/* Code field and Join button side by side; the field takes the spare width.
+   min-width: 0 lets it shrink below its default size on narrow phones. */
+.join-row {
+  display: flex;
+  gap: 8px;
+}
+
+.code-input {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+  text-transform: uppercase; /* Only how it LOOKS; script.js uppercases the value */
+  letter-spacing: 0.3em;
+  font-weight: 700;
+}
+
+/* --- LOBBY --- */
+
+/* Small grey headings, like the score sidebar's */
+.label {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.room-code {
+  font-size: 3.5rem;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+  /* letter-spacing also adds space after the last letter; the same amount on
+     the left keeps the code visually centred. */
+  padding-left: 0.2em;
+  margin-top: -12px; /* Sit closer to its "Room code" label */
+}
+
+.lobby-players {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  width: min(22rem, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.lobby-players li {
+  display: flex;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  font-weight: 600;
+  text-align: left;
+}
+
+.tags {
+  color: var(--muted);
+  font-weight: 400;
 }
 
 /* ---------------------------------------------------------------------------

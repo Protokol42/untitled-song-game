@@ -81,11 +81,41 @@ These are cheap now and painful to add later.
 | Decision | Why |
 |---|---|
 | **Each player gets a stable ID** (a token stored in the browser), separate from their WebSocket connection | Phones lock, wifi drops and pages refresh. A reconnecting player keeps their identity and score instead of counting as a new player. |
+| **The token is secret; other players see a separate public `id`** | If the token were broadcast, anyone could copy it and act as that player. |
+| **The token lives in `sessionStorage`** (per tab), the name in `localStorage` | A token survives a refresh, but each tab is its own player, so testing with several tabs works. Made with `crypto.getRandomValues`, because `crypto.randomUUID` only works on https:// or localhost, not on `http://192.168.x.x` from a phone. |
 | **The message protocol is defined as typed models** (Pydantic), e.g. `{"type": "guess", "choice": 2}` | One place documents everything the client and server can say to each other, and invalid messages are rejected automatically. |
 | **The server sends the full room state** rather than incremental updates | Simpler, and reconnection is free: just send the current state again. |
 | **Rooms are self-contained objects**, looked up by room code | Keeps rooms independent, which is what allows scaling out to multiple servers later. |
 | **Game settings live in a config object** (rounds, clip length, number of choices, scoring curve) | Host settings and gameplay tuning become easy to add. |
 | **Folder layout:** `server/`, `client/`, `experiments/` | Separates real code from throwaway tests. |
+
+---
+
+## Rooms
+
+Built in roadmap step 3, part 2. Server code: `server/protocol.py` (messages), `server/rooms.py`
+(rooms), the `/ws` route in `server/main.py`.
+
+- **Room codes** are 4 letters without I and O (easy to mix up with 1 and 0), made
+  with `secrets` so they can't be predicted.
+- **The host is whoever joined first** (`players[0]`). When the host leaves, the next
+  player becomes host without any extra code.
+- **Names** are 1–20 characters and unique within a room (ignoring case).
+- **An empty room is deleted.**
+- **Disconnecting counts as leaving, for now.** Rejoining with the token is roadmap step 4.
+- **No locks needed:** asyncio only switches between connections at an `await`, and the
+  functions that change rooms contain none.
+- The browser only moves from HOME to LOBBY when it asked to join (`state.joining`), so
+  a room update that was already on its way can't pull a player back in after Leave.
+
+### Protocol so far
+
+| Direction | Message |
+|---|---|
+| Browser → server | `create` (token, name), `join` (token, name, code), `leave` |
+| Server → browser | `room` (code, you, host, players), `error` (message) |
+
+Invalid messages get an `error` reply; the connection stays open.
 
 ---
 
@@ -159,10 +189,17 @@ so success is checked by the presence of `data`, not only the status code.
 1. ✅ **Song-source test** (`experiments/song-source-deezer/`): fetch tracks and play a
    clip in the browser. iTunes worked directly from the browser; Deezer works through a
    small FastAPI server.
-2. **Single-player version, all in the browser:** clip plays, pick from 4 choices, get a
+2. ✅ **Single-player version, all in the browser:** clip plays, pick from 4 choices, get a
    score, next round. Confirms the game is fun before adding networking.
 3. **Multiplayer:** a FastAPI server with rooms, a lobby, the state machine and scores sent
-   to every player.
+   to every player. In parts:
+   1. ✅ WebSocket experiment (a tiny chat; deleted afterwards)
+   2. ✅ Rooms and a lobby (see [Rooms](#rooms)). The host's Start still runs the
+      single-player game in the host's browser only.
+   3. Game engine in pure Python (`server/game.py`), tested with `pytest`
+   4. Connect the engine to the rooms: the server runs the rounds on its own timers
+   5. Rework the client to show the server's game state; scoreboard for every player
+   6. Playtest on home wifi, then on Render
 4. **Polish:** reconnection handling, host settings, animations, sound effects, deployment.
 
 ---

@@ -14,19 +14,29 @@ const CONFIG = {
 // State. Everything the screen depends on lives in this one object.
 //
 // `phase` is the current state of the game's state machine:
-//   START   → the Start button (and the last error, if any)
+//   HOME    → enter your name; create a room, or join one with its code
+//   LOBBY   → in a room: the code to share, who's in it; the host can Start
 //   LOADING → waiting for tracks from our server
 //   PLAYING → the clip loads, then plays; pick a title before time runs out
 //   REVEAL  → right, wrong or time's up, the points; Next starts a new round
-//   RESULTS → final score and a summary of every round; Play again
+//   RESULTS → final score and a summary of every round; Back to lobby
 //
-//   START → LOADING → PLAYING ⇄ REVEAL → RESULTS
-//                        ▲                  │
-//                        └── Play again ────┘ (via LOADING)
+//   HOME ⇄ LOBBY → LOADING → PLAYING ⇄ REVEAL → RESULTS
+//            ▲                                     │
+//            └────────── Back to lobby ────────────┘
+//
+// For now (roadmap step 2) the game itself still runs only in the host's
+// browser; the server only knows who is in which room. Later steps move the
+// game to the server so everyone in the room plays together.
 // ---------------------------------------------------------------------------
 
 let state = {
-  phase: "START",
+  phase: "HOME",
+  connected: false, // Is the WebSocket to the server open?
+  joining: false, // Asked the server to create/join a room, no answer yet
+  // The server's latest "room" message (see server/protocol.py, RoomState):
+  // { code, you, host, players: [{ id, name }, ...] }. null when not in a room.
+  room: null,
   tracks: [], // Every playable track in the playlist
   error: null,
   // This game's answers, one per round, picked at game start from a shuffled
@@ -51,6 +61,15 @@ let state = {
 // bookkeeping for a side effect, like the <audio> element.
 let roundTimer = null;
 
+// What's typed into the home screen's fields so far. Not in `state` on
+// purpose: setState redraws the screen, and a redraw on every keystroke would
+// rebuild the field you're typing in. Kept here, the text survives when the
+// screen IS redrawn for another reason (homeScreen puts it back).
+// The name is remembered between visits in localStorage (it stays until
+// cleared). `??` means "if the left side is null, use the right side":
+// getItem gives null the first time.
+const drafts = { name: localStorage.getItem("name") ?? "", code: "" };
+
 // The ONLY way to change state. Because every change goes through here, the
 // screen is redrawn every time and can never show something out of date.
 //
@@ -65,6 +84,52 @@ function setState(changes) {
 // ---------------------------------------------------------------------------
 // Actions: things that happen (clicks, network replies) and update state.
 // ---------------------------------------------------------------------------
+
+// --- Rooms ---
+
+// The name from the home screen, or null (after showing why) if it's empty.
+// The server checks names too; this is just a quicker, friendlier message.
+function checkedName() {
+  const name = drafts.name.trim(); // trim() removes spaces at both ends
+  if (name === "") {
+    setState({ error: "Enter your name first" });
+    return null;
+  }
+  localStorage.setItem("name", name);
+  return name;
+}
+
+function createRoom() {
+  const name = checkedName();
+  if (name === null) {
+    return;
+  }
+  setState({ joining: true, error: null });
+  send({ type: "create", token: playerToken(), name: name });
+  // Nothing else happens here: the server's "room" reply moves us to the
+  // LOBBY (see receive), or its "error" reply shows what went wrong.
+}
+
+function joinRoom() {
+  const name = checkedName();
+  if (name === null) {
+    return;
+  }
+  const code = drafts.code.trim().toUpperCase();
+  if (code.length !== 4) {
+    setState({ error: "Room codes are 4 letters" });
+    return;
+  }
+  setState({ joining: true, error: null });
+  send({ type: "join", token: playerToken(), name: name, code: code });
+}
+
+function leaveRoom() {
+  send({ type: "leave" });
+  setState({ phase: "HOME", room: null, error: null });
+}
+
+// --- The game ---
 
 async function loadTracks() {
   setState({ phase: "LOADING", error: null });
@@ -85,19 +150,19 @@ async function loadTracks() {
     }
     startGame(tracks);
   } catch (error) {
-    // Back to the start screen, which shows the error and lets you try again.
-    setState({ phase: "START", error: error.message });
+    // Back to the lobby, which shows the error and lets you try again.
+    setState({ phase: "LOBBY", error: error.message });
   }
 }
 
-// Reset everything for a new game. Start and Play again both come through here
-// (via loadTracks), so nothing from an earlier game can carry over.
+// Reset everything for a new game. Every game starts here (via loadTracks),
+// so nothing from an earlier game can carry over.
 function startGame(tracks) {
   // Deal from a shuffled deck: the first `rounds` tracks are this game's
   // answers, so no song can come up twice. slice(0, n) takes the first n items
   // (or all of them, if there are fewer).
   const answers = shuffle(tracks).slice(0, CONFIG.rounds);
-  setState({ tracks: tracks, answers: answers, history: [] });
+  setState({ tracks: tracks, answers: answers, history: [], error: null });
   startRound();
 }
 
@@ -133,7 +198,7 @@ function clipFailed(error) {
   clearTimeout(roundTimer);
   stopClip();
   setState({
-    phase: "START",
+    phase: "LOBBY",
     error: "Couldn't play the clip. Press Start to reload the songs.",
   });
 }
@@ -190,6 +255,13 @@ function showResults() {
     return;
   }
   setState({ phase: "RESULTS" });
+}
+
+function backToLobby() {
+  if (state.phase !== "RESULTS") {
+    return;
+  }
+  setState({ phase: "LOBBY" });
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +400,85 @@ function stopClip() {
 }
 
 // ---------------------------------------------------------------------------
+// Connection: the WebSocket to our server. Like audio, it's a side effect: it
+// talks to the outside world, and turns what it hears into state changes.
+// ---------------------------------------------------------------------------
+
+// The open connection. Bookkeeping like roundTimer, so not in `state`; what
+// the screen needs to know about it is in state.connected.
+let socket = null;
+
+function connect() {
+  // ws:// normally, wss:// (encrypted) when the page itself came over https://,
+  // as it will once deployed. location.host is the server that sent this page.
+  const scheme = location.protocol === "https:" ? "wss://" : "ws://";
+  socket = new WebSocket(scheme + location.host + "/ws");
+
+  socket.onopen = () => setState({ connected: true });
+  // The server sends JSON text; JSON.parse turns it into an object.
+  socket.onmessage = (event) => receive(JSON.parse(event.data));
+  // The server stopped or restarted, or the network dropped. The server has
+  // already counted us as gone from the room, so back to the start. (Coming
+  // back into the room automatically is roadmap step 4.)
+  socket.onclose = connectionLost;
+}
+
+// Send a message to the server. send() only takes text, so turn the object
+// into JSON text first. Every message we can send is listed in protocol.py.
+function send(message) {
+  socket.send(JSON.stringify(message));
+}
+
+// Everything the server says arrives here and becomes a state change.
+function receive(message) {
+  if (message.type === "room") {
+    if (state.phase === "HOME") {
+      // Only move into the lobby if we asked to. Without this check, a room
+      // update already on its way when you pressed Leave would pull you
+      // straight back in.
+      if (state.joining) {
+        setState({ phase: "LOBBY", joining: false, room: message, error: null });
+      }
+    } else {
+      // Already in the room (lobby or playing): just the new player list.
+      setState({ room: message });
+    }
+  } else if (message.type === "error") {
+    setState({ joining: false, error: message.message });
+  }
+}
+
+function connectionLost() {
+  clearTimeout(roundTimer);
+  stopClip();
+  setState({
+    phase: "HOME",
+    connected: false,
+    joining: false,
+    room: null,
+    error: "Lost the connection to the server. Refresh the page to reconnect.",
+  });
+}
+
+// This browser tab's secret token (see server/protocol.py), made once and then
+// kept in sessionStorage. sessionStorage belongs to one tab: it survives a
+// refresh but a new tab starts empty, so two tabs are two different players.
+// (localStorage, used for the name, is shared by every tab of this site.)
+function playerToken() {
+  let token = sessionStorage.getItem("token");
+  if (token === null) {
+    // 16 random bytes written as 32 hex characters. crypto.randomUUID() would
+    // be shorter, but browsers only allow it on https:// or localhost, and a
+    // phone testing on your wifi opens http://192.168.x.x.
+    // toString(16) writes a number in hex; padStart makes 5 into "05".
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    sessionStorage.setItem("token", token);
+  }
+  return token;
+}
+
+// ---------------------------------------------------------------------------
 // Rendering: draws the screen from state. It only READS state, never changes
 // it; changes happen in the actions above.
 // ---------------------------------------------------------------------------
@@ -347,13 +498,98 @@ function el(tag, text = "", className = "") {
   return element;
 }
 
+// A button with a click handler, e.g. button("Join", joinRoom).
+function button(text, onClick, className = "") {
+  const element = el("button", text, className);
+  element.addEventListener("click", onClick);
+  return element;
+}
+
+// A one-line text field. onInput(text) runs on every change; onEnter() when
+// Enter is pressed in it.
+function textInput(value, placeholder, maxLength, onInput, onEnter) {
+  const input = document.createElement("input");
+  input.value = value;
+  input.placeholder = placeholder; // Grey hint shown while it's empty
+  input.maxLength = maxLength; // The browser stops typing after this many
+  input.autocomplete = "off"; // No suggestions from earlier visits
+  input.addEventListener("input", () => onInput(input.value));
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      onEnter();
+    }
+  });
+  return input;
+}
+
 // --- Centred screens ---
 
-function startScreen(state) {
-  const button = el("button", "Start", "primary");
-  button.addEventListener("click", loadTracks);
+function homeScreen(state) {
+  // Disabled until connected, and while waiting for the server's answer, so
+  // you can't click twice and create two rooms.
+  const busy = !state.connected || state.joining;
 
-  const elements = [el("h1", "Guess the Song"), button];
+  // The arrow functions save what's typed into `drafts` (see the top of the file).
+  const name = textInput(drafts.name, "Your name", 20, (text) => {
+    drafts.name = text;
+  }, createRoom);
+  const create = button("Create room", createRoom, "primary");
+  const code = textInput(drafts.code, "Code", 4, (text) => {
+    drafts.code = text;
+  }, joinRoom);
+  code.classList.add("code-input");
+  const join = button("Join", joinRoom);
+  for (const element of [name, create, code, join]) {
+    element.disabled = busy;
+  }
+
+  const joinRow = el("div", "", "join-row");
+  joinRow.append(code, join);
+  const form = el("div", "", "home-form");
+  form.append(name, create, el("p", "or join a friend's room", "divider"), joinRow);
+
+  const elements = [el("h1", "Guess the Song"), form];
+  if (state.error) {
+    elements.push(el("p", state.error, "error"));
+  } else if (!state.connected) {
+    elements.push(el("p", "Connecting to the server…", "message"));
+  }
+  return elements;
+}
+
+function lobbyScreen(state) {
+  const { code, you, host, players } = state.room;
+
+  // One row per player: the name, then "host" and/or "you" in grey.
+  const list = el("ul", "", "lobby-players");
+  for (const player of players) {
+    const tags = [];
+    if (player.id === host) {
+      tags.push("host");
+    }
+    if (player.id === you) {
+      tags.push("you");
+    }
+    const row = el("li");
+    row.append(el("span", player.name), el("span", tags.join(" · "), "tags"));
+    list.append(row);
+  }
+
+  // Only the host starts the game; everyone else waits.
+  const start =
+    you === host
+      ? button("Start game", loadTracks, "primary")
+      : el("p", "Waiting for the host to start…", "message");
+
+  const elements = [
+    el("p", "Room code", "label"),
+    el("p", code, "room-code"),
+    el("p", "Share this code with your friends", "message"),
+    el("p", "Players · " + players.length, "label"),
+    list,
+    start,
+    button("Leave room", leaveRoom),
+  ];
   if (state.error) {
     elements.push(el("p", state.error, "error"));
   }
@@ -385,16 +621,13 @@ function resultsScreen(state) {
     list.append(row);
   }
 
-  // Play again goes through loadTracks, so every game gets fresh preview links
-  // (Deezer's expire after 15 minutes).
-  const again = el("button", "Play again", "primary");
-  again.addEventListener("click", loadTracks);
-
+  // The lobby's Start goes through loadTracks, so every game gets fresh
+  // preview links (Deezer's expire after 15 minutes).
   return [
     el("p", "Final score", "message"),
     el("p", String(totalScore(state.history)), "final-score"),
     list,
-    again,
+    button("Back to lobby", backToLobby, "primary"),
   ];
 }
 
@@ -547,8 +780,11 @@ function render(state) {
   let elements;
   let layout = "layout-center";
   switch (state.phase) {
-    case "START":
-      elements = startScreen(state);
+    case "HOME":
+      elements = homeScreen(state);
+      break;
+    case "LOBBY":
+      elements = lobbyScreen(state);
       break;
     case "LOADING":
       elements = loadingScreen();
@@ -569,5 +805,6 @@ function render(state) {
   app.replaceChildren(...elements);
 }
 
-// Draw the first screen when the page loads.
+// When the page loads: draw the first screen, then connect to the server.
 render(state);
+connect();

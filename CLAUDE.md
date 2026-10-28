@@ -17,7 +17,7 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
 ## Stack
 
 - Client: HTML, CSS, vanilla JavaScript
-- Server: Python (FastAPI + Uvicorn + httpx). WebSockets not built yet
+- Server: Python (FastAPI + Uvicorn + httpx + websockets)
 - Python setup: Python 3.14 (pinned in `.python-version`, which Render also reads), one
   virtual environment at the project root (`.venv/`, git-ignored), dependencies pinned in
   the root `requirements.txt` (`pip freeze`)
@@ -29,15 +29,18 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
   - Part 1 (iTunes, called directly from the browser) worked and was then deleted.
   - Part 2 (Deezer through a FastAPI server that also serves the page, so page and API
     share one origin and there's no CORS) worked; it grew into `server/` and was deleted.
-- Roadmap step 2 (single-player) is in progress, in `server/` + `client/`:
-  - The server only supplies tracks: `GET /api/playlist/{id}/tracks` (Deezer, our
-    `Track` model, `title_short`, tracks without previews skipped). It also serves
-    `client/`. Run from the root: `uvicorn main:app --reload --app-dir server`
-  - The game runs in the browser (`client/script.js`): one `state` object, `setState`,
-    `render(state)`, phases `START → LOADING → PLAYING ⇄ REVEAL → RESULTS`.
-  - Done: playable rounds, countdown bar, scoring, full game with results, dark-theme
-    CSS (`client/style.css`: Grid layout, sidebar becomes a top strip below 800px).
-    Next: playtest with friends, then decide on roadmap step 3 (multiplayer).
+- Roadmap step 2 (single-player) is **done**.
+- Roadmap step 3 (multiplayer) is in progress; parts 1–2 of 6 are done (see the roadmap in
+  ARCHITECTURE.md). Run from the root: `uvicorn main:app --reload --app-dir server`
+  - Server (`server/`): `main.py` (routes only: `GET /api/playlist/{id}/tracks`, `/ws`,
+    serves `client/`), `tracks.py` (`Track`), `deezer.py` (provider), `protocol.py`
+    (WebSocket messages as Pydantic models), `rooms.py` (in-memory rooms, broadcast).
+  - Client (`client/script.js`): one `state` object, `setState`, `render(state)`, phases
+    `HOME ⇄ LOBBY → LOADING → PLAYING ⇄ REVEAL → RESULTS → LOBBY`. Rooms and lobby are
+    real; the game itself still runs only in the host's browser.
+  - `deezer.py` still raises FastAPI's `HTTPException`; change it to its own error when
+    the game starts fetching tracks from the WebSocket side (part 4).
+  - Next: part 3, the game engine in `server/game.py` with `pytest` (needs installing).
 - Collaboration: present the plan and wait for the owner's go-ahead before writing code
   or installing anything. Then Claude writes small, well-commented pieces; the owner
   reads and runs them.
