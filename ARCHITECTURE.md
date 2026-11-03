@@ -112,10 +112,29 @@ Built in roadmap step 3, part 2. Server code: `server/protocol.py` (messages), `
 
 | Direction | Message |
 |---|---|
-| Browser → server | `create` (token, name), `join` (token, name, code), `leave` |
-| Server → browser | `room` (code, you, host, players), `error` (message) |
+| Browser → server | `create` (token, name), `join` (token, name, code), `leave`, `start` (host, in LOBBY), `guess` (track_id), `lobby` (host, in RESULTS) |
+| Server → browser | `room` (code, you, host, players, phase, game), `error` (message) |
 
 Invalid messages get an `error` reply; the connection stays open.
+
+- **`phase`** is the room's phase: `LOBBY`, `LOADING` (fetching songs), then the game's
+  `COUNTDOWN`, `PLAYING`, `REVEAL`, `RESULTS`. The host's `lobby` message returns from
+  RESULTS to LOBBY. Players can only join in LOBBY.
+- **`game`** is built separately for each player and only holds what that player may
+  know: no answer, no round points and nobody else's picks until REVEAL. Scores only
+  count revealed rounds, or a total going up would give away a right answer.
+- **A guess is only answered to the guesser** (their pick shown). Everyone else learns
+  about it at REVEAL.
+- **Each room's game runs as one asyncio task** (`run_game` in `rooms.py`): fetch fresh
+  tracks, then COUNTDOWN (`countdown_seconds`, first round only, browsers load the clip)
+  → PLAYING (until `clip_seconds` pass, or an `asyncio.Event` says everyone answered) →
+  REVEAL (`reveal_seconds`) → PLAYING → … → RESULTS. Timing uses `time.monotonic()`.
+  The task is cancelled when the room empties.
+- **No countdown between rounds:** during REVEAL, `game.next_clip` carries the next
+  round's preview link and start (not its title), and a second, hidden `<audio>`
+  element downloads it while the revealed song keeps playing. When PLAYING arrives,
+  the main player loads the same link from the browser's cache. All clip starts are
+  picked when the game is created, so the next one is known in advance.
 
 ---
 
@@ -126,21 +145,30 @@ Invalid messages get an `error` reply; the connection stays open.
 - **Scoring (starting point):** `correct ? max(100, 1000 × (1 − elapsed / clipSeconds)) : 0`,
   so a late correct answer still earns something. To be tuned during playtesting.
 - **Round length = clip length:** you answer while the clip plays; when it ends, time's up.
-  The clock starts when the audio actually starts playing, and the answer buttons stay
-  disabled until then, so loading time neither eats into the round nor allows blind
-  guesses for full points.
-- **Timing fairness:** clients download the clip during the countdown and confirm they're
-  ready; playback starts together, and timing is measured from the round start.
+  The server's clock starts when it sends PLAYING, and the answer buttons are disabled
+  until that arrives.
+- **Timing fairness (simple version, built):** clients download the clip in advance
+  (during COUNTDOWN for round 1, during the previous REVEAL after that), so it's ready
+  when PLAYING arrives. Network lag (usually 20–100 ms) counts against the
+  player, which is fine among friends. If it feels unfair in playtests: have clients
+  confirm "clip loaded" before the server starts PLAYING.
+- **During COUNTDOWN** (round 1 only) the choices are already visible (but disabled).
+  From round 2 on, the choices appear as the clip starts. **During REVEAL** the song
+  keeps playing. If reading the choices feels rushed in playtests, a short countdown
+  (~1 s) can come back.
 - **Round end:** a round ends when every player has answered or the timer runs out,
   whichever comes first. On each guess the server checks whether everyone has answered
   and, if so, moves straight to `REVEAL`.
-- **Next round:** in multiplayer, `REVEAL` lasts a set time (`revealSeconds` in the config)
-  and the server then moves everyone to the next round together; no "Next" button. The
-  single-player version (roadmap step 2) uses a button for now.
+- **Next round:** `REVEAL` lasts a set time (`reveal_seconds` in `GameConfig`) and the
+  server then moves everyone to the next round together; no "Next" button.
 - **Autoplay:** browsers only allow audio after the user has interacted with the page.
   Chrome and Firefox remember one earlier click, so timed rounds can start on their own;
   Safari tends to allow only the same `<audio>` element that was first played after a
-  click. So the client uses **one shared `<audio>` element** for the whole game.
+  click. So the client uses **one shared `<audio>` element** for the whole game, and
+  Create/Join "unlock" it by playing a silent WAV during the click. (Not yet tested on
+  an iPhone.)
+- **Background tabs:** Chrome doesn't load media in a hidden tab, so a player who switches
+  tabs hears nothing until they come back. Test with separate windows, not tabs.
 
 ---
 
@@ -153,6 +181,7 @@ Findings from testing the APIs (October 2026):
 | Preview clips | ~30 s `.m4a` (`previewUrl`) | ~30 s `.mp3` (`preview`) |
 | Callable directly from the browser (CORS) | Yes (`access-control-allow-origin: *`) | **No.** Must be called from our server. |
 | Preview URLs expire | No (as observed) | **Yes**, 15 minutes after fetching (signed `hdnea=exp=…` token) |
+| Browser may cache the preview file | | Yes: `cache-control: public, max-age=11731004` (~4.5 months) |
 | Playlists / charts | Search only | Yes. Useful for themed games. |
 | Auth required | No | No (for search and lookups) |
 
@@ -196,9 +225,15 @@ so success is checked by the presence of `data`, not only the status code.
    1. ✅ WebSocket experiment (a tiny chat; deleted afterwards)
    2. ✅ Rooms and a lobby (see [Rooms](#rooms)). The host's Start still runs the
       single-player game in the host's browser only.
-   3. Game engine in pure Python (`server/game.py`), tested with `pytest`
-   4. Connect the engine to the rooms: the server runs the rounds on its own timers
-   5. Rework the client to show the server's game state; scoreboard for every player
+   3. ✅ Game engine in pure Python (`server/game.py`), tested with `pytest`
+      (`server/tests/`). Time and randomness are passed in; timers stay outside the
+      engine. A room with no game is in its lobby.
+   4. ✅ Connect the engine to the rooms: the server runs the rounds on its own timers
+      (see [Protocol so far](#protocol-so-far)). Tested with Python clients; the
+      browser doesn't use it yet.
+   5. ✅ Rework the client to show the server's game state; scoreboard for every player.
+      `script.js` no longer has game rules: the screen follows `room.phase`, and the
+      audio is loaded on COUNTDOWN and played on PLAYING.
    6. Playtest on home wifi, then on Render
 4. **Polish:** reconnection handling, host settings, animations, sound effects, deployment.
 

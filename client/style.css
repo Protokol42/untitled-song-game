@@ -226,6 +226,14 @@ h1 {
   color: var(--muted);
 }
 
+/* The code and its Copy button, side by side. */
+.room-code-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: -12px; /* Sit closer to the "Room code" label */
+}
+
 .room-code {
   font-size: 3.5rem;
   font-weight: 800;
@@ -233,7 +241,14 @@ h1 {
   /* letter-spacing also adds space after the last letter; the same amount on
      the left keeps the code visually centred. */
   padding-left: 0.2em;
-  margin-top: -12px; /* Sit closer to its "Room code" label */
+}
+
+/* A compact button, e.g. Copy. min-width keeps it from changing size when
+   the text switches to the longer "Copied!", which would shift the code. */
+button.small {
+  padding: 6px 12px;
+  font-size: 0.85rem;
+  min-width: 5.5em;
 }
 
 .lobby-players {
@@ -331,10 +346,28 @@ h1 {
   padding: 0;
 }
 
+.players {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .players li {
   display: flex;
   justify-content: space-between;
-  font-weight: 600;
+  gap: 12px;
+  color: var(--muted);
+}
+
+/* Your own row stands out, in the sidebar and on the results screen. */
+.players li.you {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.results li.you {
+  outline: 2px solid var(--accent);
+  font-weight: 700;
 }
 
 /* Timer and choices, along the bottom */
@@ -379,10 +412,18 @@ h1 {
   grid-column: 1 / -1; /* From the first column line to the last */
 }
 
-/* Greyed out: while the clip loads, and on REVEAL for the choices that
-   weren't the answer or your pick. */
+/* Greyed out: during the countdown, after you've picked, and on REVEAL for
+   the choices that weren't the answer or your pick. */
 .choice:disabled {
   opacity: 0.45;
+}
+
+/* Your pick, while waiting for REVEAL: outlined in the accent colour, not
+   green or red, because whether it was right isn't known yet. */
+.choice.picked {
+  opacity: 1;
+  outline: 3px solid var(--accent);
+  outline-offset: -3px; /* Draw it inside the button's edge */
 }
 
 /* REVEAL colours. These come after .choice:disabled and are equally specific,
@@ -430,8 +471,17 @@ h1 {
     margin: 0;
   }
 
+  /* Players side by side, wrapping onto a second line if there are many,
+     so the strip stays short. */
   .players {
     flex: 1; /* Take the rest of the strip */
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 4px 20px; /* 4px between lines, 20px between players */
+  }
+
+  .players li {
+    gap: 6px;
   }
 
   .choice {

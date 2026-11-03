@@ -1,65 +1,42 @@
 // ---------------------------------------------------------------------------
-// Settings. One place to tune the game (ARCHITECTURE.md: "settings live in a
-// config object").
-// ---------------------------------------------------------------------------
-
-const CONFIG = {
-  playlistId: 9890417302, // Deezer "100% Madeon"
-  rounds: 20, // Songs per game (fewer if the playlist is smaller)
-  choices: 4, // Answer buttons per round (1 right + 3 wrong)
-  clipSeconds: 10, // How much of the song plays = time to answer
-};
-
-// ---------------------------------------------------------------------------
 // State. Everything the screen depends on lives in this one object.
 //
-// `phase` is the current state of the game's state machine:
-//   HOME    → enter your name; create a room, or join one with its code
-//   LOBBY   → in a room: the code to share, who's in it; the host can Start
-//   LOADING → waiting for tracks from our server
-//   PLAYING → the clip loads, then plays; pick a title before time runs out
-//   REVEAL  → right, wrong or time's up, the points; Next starts a new round
-//   RESULTS → final score and a summary of every round; Back to lobby
+// The server runs the game (server/rooms.py) and sends the whole room after
+// every change. This page shows it, plays the music and sends clicks back. So
+// the game's state machine lives on the server, and the screen follows the
+// room's phase:
 //
-//   HOME ⇄ LOBBY → LOADING → PLAYING ⇄ REVEAL → RESULTS
-//            ▲                                     │
-//            └────────── Back to lobby ────────────┘
+//   (no room) HOME → enter your name; create a room, or join one with its code
+//   LOBBY     → the code to share, who's in it; the host can Start
+//   LOADING   → the server is fetching songs
+//   COUNTDOWN → first round only: its clip loads; the choices are shown but
+//               not clickable
+//   PLAYING   → the clip plays; pick a title before time runs out
+//   REVEAL    → the answer, right or wrong, your points; the song plays on
+//               while the next round's clip downloads in the background
+//   RESULTS   → final scores and your rounds; the host goes back to the lobby
 //
-// For now (roadmap step 2) the game itself still runs only in the host's
-// browser; the server only knows who is in which room. Later steps move the
-// game to the server so everyone in the room plays together.
+//   HOME ⇄ LOBBY → LOADING → COUNTDOWN → PLAYING → REVEAL → … → RESULTS
+//            ▲                              ▲         │            │
+//            │                              └─ next ──┘            │
+//            └─────────────── host: Back to lobby ─────────────────┘
 // ---------------------------------------------------------------------------
 
 let state = {
-  phase: "HOME",
   connected: false, // Is the WebSocket to the server open?
   joining: false, // Asked the server to create/join a room, no answer yet
   // The server's latest "room" message (see server/protocol.py, RoomState):
-  // { code, you, host, players: [{ id, name }, ...] }. null when not in a room.
+  // { code, you, host, players, phase, game }. null when not in a room.
   room: null,
-  tracks: [], // Every playable track in the playlist
   error: null,
-  // This game's answers, one per round, picked at game start from a shuffled
-  // playlist, so no song can be the answer twice.
-  answers: [],
-  // Every finished round of this game, in order. The total score is computed
-  // from this (see totalScore), not stored separately, so the two can't disagree.
-  history: [],
-  // The current round, once one has started:
-  //   number:    1 for the first round, 2 for the second, ...
-  //   answer:    the track that's playing
-  //   choices:   [track, ...], shuffled; the answer is one of them
-  //   startedAt: null while the clip loads, then performance.now() when it starts
-  //   pickedId:  the clicked track's id; null if none (yet, or time ran out)
-  //   elapsed:   seconds from clip start to answer (set when the round ends)
-  //   points:    points for this round (set when the round ends)
-  round: null,
+  // performance.now() when this round's PLAYING arrived, for the timer bar.
+  playingSince: null,
+  clipError: null, // Set if this round's clip couldn't play
+  copied: false, // Just copied the room code: the button says "Copied!" for a moment
 };
 
-// The handle of the "time's up" timer, so it can be cancelled when you answer
-// first. It's not in `state` because nothing on screen depends on it; it's
-// bookkeeping for a side effect, like the <audio> element.
-let roundTimer = null;
+// The timer that turns "Copied!" back into "Copy". Bookkeeping, like socket.
+let copiedTimer = null;
 
 // What's typed into the home screen's fields so far. Not in `state` on
 // purpose: setState redraws the screen, and a redraw on every keystroke would
@@ -74,18 +51,22 @@ const drafts = { name: localStorage.getItem("name") ?? "", code: "" };
 // screen is redrawn every time and can never show something out of date.
 //
 // { ...state, ...changes } builds a new object: copy every field of the old
-// state, then overwrite the ones in `changes`. So setState({ phase: "LOADING" })
-// changes phase and keeps tracks and error as they were.
+// state, then overwrite the ones in `changes`. So setState({ error: null })
+// changes error and keeps everything else as it was.
 function setState(changes) {
   state = { ...state, ...changes };
   render(state);
 }
 
-// ---------------------------------------------------------------------------
-// Actions: things that happen (clicks, network replies) and update state.
-// ---------------------------------------------------------------------------
+// Which screen to show: the room's phase, or HOME when not in a room.
+function phaseOf(state) {
+  return state.room === null ? "HOME" : state.room.phase;
+}
 
-// --- Rooms ---
+// ---------------------------------------------------------------------------
+// Actions: things the player does. Most just send a message; the server's
+// reply (see receive) is what changes the screen.
+// ---------------------------------------------------------------------------
 
 // The name from the home screen, or null (after showing why) if it's empty.
 // The server checks names too; this is just a quicker, friendlier message.
@@ -104,10 +85,9 @@ function createRoom() {
   if (name === null) {
     return;
   }
+  unlockAudio(); // This is a click: the moment browsers allow it (see Audio)
   setState({ joining: true, error: null });
   send({ type: "create", token: playerToken(), name: name });
-  // Nothing else happens here: the server's "room" reply moves us to the
-  // LOBBY (see receive), or its "error" reply shows what went wrong.
 }
 
 function joinRoom() {
@@ -120,283 +100,81 @@ function joinRoom() {
     setState({ error: "Room codes are 4 letters" });
     return;
   }
+  unlockAudio();
   setState({ joining: true, error: null });
   send({ type: "join", token: playerToken(), name: name, code: code });
 }
 
 function leaveRoom() {
   send({ type: "leave" });
-  setState({ phase: "HOME", room: null, error: null });
+  stopClip();
+  setState({ room: null, error: null });
 }
 
-// --- The game ---
-
-async function loadTracks() {
-  setState({ phase: "LOADING", error: null });
-
+// Copy the room code to the clipboard, so it can be pasted into a chat.
+async function copyRoomCode() {
+  const code = state.room.code;
   try {
-    const response = await fetch(
-      "/api/playlist/" + CONFIG.playlistId + "/tracks",
-    );
-    // fetch() only throws when the network fails. An error status like 404 or
-    // 502 still counts as a "successful" fetch, so check response.ok ourselves.
-    if (!response.ok) {
-      throw new Error("Couldn't load tracks (HTTP " + response.status + ")");
+    // navigator.clipboard is the modern way, but browsers only offer it on
+    // secure pages (https:// or localhost). On http://192.168.x.x (a phone
+    // on your wifi) it's undefined, so fall back to the old way.
+    if (navigator.clipboard) {
+      await navigator.clipboard.writeText(code); // A promise: wait for it
+    } else {
+      copyTheOldWay(code);
     }
-    const tracks = await response.json();
-    // A round needs at least 2 songs (1 right + 1 wrong) to be a choice at all.
-    if (tracks.length < 2) {
-      throw new Error("This playlist has too few playable songs");
-    }
-    startGame(tracks);
   } catch (error) {
-    // Back to the lobby, which shows the error and lets you try again.
-    setState({ phase: "LOBBY", error: error.message });
-  }
-}
-
-// Reset everything for a new game. Every game starts here (via loadTracks),
-// so nothing from an earlier game can carry over.
-function startGame(tracks) {
-  // Deal from a shuffled deck: the first `rounds` tracks are this game's
-  // answers, so no song can come up twice. slice(0, n) takes the first n items
-  // (or all of them, if there are fewer).
-  const answers = shuffle(tracks).slice(0, CONFIG.rounds);
-  setState({ tracks: tracks, answers: answers, history: [], error: null });
-  startRound();
-}
-
-function startRound() {
-  const number = state.history.length + 1; // 0 rounds done → round 1
-  const answer = state.answers[number - 1]; // Arrays count from 0
-  // { ...a, number } copies everything from pickRound's result and adds number.
-  const round = { ...pickRound(answer, state.tracks), number: number };
-  setState({ phase: "PLAYING", round: round });
-  playClip(answer.preview_url, clipStarted, clipFailed);
-}
-
-// Called by the audio code once the clip is actually playing. The clock starts
-// now, not when the round started, so download time never eats into your time.
-function clipStarted() {
-  if (state.phase !== "PLAYING") {
+    console.error("Copy failed:", error);
+    setState({ error: "Couldn't copy. The code is " + code });
     return;
   }
-  setState({ round: { ...state.round, startedAt: performance.now() } });
-  roundTimer = setTimeout(timeUp, CONFIG.clipSeconds * 1000);
+
+  setState({ copied: true });
+  // Back to "Copy" after 1.5 s. Clear any earlier timer first, so clicking
+  // twice quickly doesn't switch it back early.
+  clearTimeout(copiedTimer);
+  copiedTimer = setTimeout(() => setState({ copied: false }), 1500);
 }
 
-// Called by the audio code if the clip can't load or the browser blocks it.
-// Most likely cause: Deezer's preview links expire 15 minutes after we fetched
-// them. Pressing Start fetches the tracks again, which gives fresh links.
-function clipFailed(error) {
-  if (state.phase !== "PLAYING") {
-    return;
+// The pre-clipboard-API way: put the text in an invisible text box, select
+// it, and ask the browser to copy the selection. execCommand is officially
+// outdated, but every browser still supports it, and it works on http://.
+function copyTheOldWay(text) {
+  const box = document.createElement("textarea");
+  box.value = text;
+  box.style.position = "fixed"; // Don't scroll the page to where it's added
+  box.style.opacity = "0";
+  document.body.append(box);
+  box.select();
+  const copied = document.execCommand("copy"); // true if it worked
+  box.remove();
+  if (!copied) {
+    throw new Error("execCommand('copy') failed");
   }
-  console.error("Clip failed:", error);
-  // Cancel what we scheduled. (Not endRound: this round never really happened,
-  // so it shouldn't be recorded in the history.)
-  clearTimeout(roundTimer);
-  stopClip();
-  setState({
-    phase: "LOBBY",
-    error: "Couldn't play the clip. Press Start to reload the songs.",
-  });
 }
 
-function pickChoice(track) {
-  // State machine guard: a pick only counts while the clip is playing.
-  // A second click, or one after time ran out, is ignored. (The buttons are
-  // also disabled until the clip starts; this guard doesn't rely on that.)
-  if (state.phase !== "PLAYING" || state.round.startedAt === null) {
-    return;
-  }
-  const elapsed = (performance.now() - state.round.startedAt) / 1000; // ms → s
-  endRound(track.id, elapsed);
+// Host only (the server checks too).
+function startGame() {
+  setState({ error: null });
+  send({ type: "start" });
 }
 
-// Called by the timer when the clip's time is up. If you answered first, the
-// timer was cancelled; the guard is a second safety net.
-function timeUp() {
-  if (state.phase !== "PLAYING") {
-    return;
-  }
-  endRound(null, CONFIG.clipSeconds);
-}
-
-// The one place a round ends, whether by answer or time-out.
-function endRound(pickedId, elapsed) {
-  // Cancel what we scheduled: the timer and the audio's handlers. (If time ran
-  // out, the timer has already fired; clearing it again is harmless.)
-  clearTimeout(roundTimer);
-  stopClip();
-
-  const correct = pickedId === state.round.answer.id;
-  const points = scoreFor(correct, elapsed);
-
-  // A new round object: copy the old one and fill in the result. We build a new
-  // object instead of changing state.round directly, so ALL changes go through
-  // setState and the screen always gets redrawn.
-  const finished = {
-    ...state.round,
-    pickedId: pickedId,
-    elapsed: elapsed,
-    points: points,
-  };
-  // Same idea for the history: a new array with the old rounds plus this one.
-  setState({
-    phase: "REVEAL",
-    round: finished,
-    history: [...state.history, finished],
-  });
-}
-
-function showResults() {
-  if (state.phase !== "REVEAL") {
-    return;
-  }
-  setState({ phase: "RESULTS" });
-}
-
+// Host only, on the results screen.
 function backToLobby() {
-  if (state.phase !== "RESULTS") {
+  send({ type: "lobby" });
+}
+
+function pickChoice(trackId) {
+  // Guard: one pick per round, only while the clip plays. The buttons are
+  // disabled otherwise too, and the server ignores extra guesses anyway;
+  // this just saves sending a message that can't count.
+  const game = state.room.game;
+  if (phaseOf(state) !== "PLAYING" || game.picked !== null) {
     return;
   }
-  setState({ phase: "LOBBY" });
-}
-
-// ---------------------------------------------------------------------------
-// Game rules: plain functions that compute things from data. No state, no
-// screen, no audio, which makes them easy to read and to test.
-// ---------------------------------------------------------------------------
-
-// Return a shuffled COPY of an array (Fisher–Yates shuffle).
-//
-// Walk from the last position down to the second. For each position i, pick a
-// random position j from 0..i (the part not yet fixed) and swap them. Every
-// item is equally likely to land in each spot, so every order is equally likely.
-// (The popular `sort(() => Math.random() - 0.5)` is NOT fair: sorting assumes
-// comparisons are consistent, and random answers make some orders more common.)
-function shuffle(array) {
-  const result = [...array]; // Copy, so the caller's array isn't changed
-  for (let i = result.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1)); // Random whole number 0..i
-    [result[i], result[j]] = [result[j], result[i]]; // Swap
-  }
-  return result;
-}
-
-// Set up a round for the given answer: add wrong choices from the same
-// playlist, all with different titles (ignoring upper/lower case), so no two
-// buttons say the same thing.
-function pickRound(answer, tracks) {
-  // Every track except the answer, in random order. filter() keeps the items
-  // for which the function returns true.
-  const others = shuffle(tracks.filter((track) => track.id !== answer.id));
-
-  const choices = [answer];
-  // A Set holds each value at most once and answers "have I seen this?" fast.
-  const usedTitles = new Set([answer.title.toLowerCase()]);
-
-  for (const track of others) {
-    if (choices.length === CONFIG.choices) {
-      break; // Enough choices
-    }
-    const title = track.title.toLowerCase();
-    if (!usedTitles.has(title)) {
-      usedTitles.add(title);
-      choices.push(track);
-    }
-  }
-
-  // Shuffle again, or the answer would always be the first button.
-  return {
-    answer: answer,
-    choices: shuffle(choices),
-    startedAt: null,
-    pickedId: null,
-    elapsed: null,
-    points: null,
-  };
-}
-
-// Points for one answer (formula from ARCHITECTURE.md). Right answers earn
-// 1000 at once, dropping steadily to 100 at the end; wrong answers earn 0.
-// Math.max(100, ...) is the floor, so a late right answer still earns something.
-function scoreFor(correct, elapsedSeconds) {
-  if (!correct) {
-    return 0;
-  }
-  const timeLeft = 1 - elapsedSeconds / CONFIG.clipSeconds; // 1 at start → 0 at end
-  return Math.round(Math.max(100, 1000 * timeLeft));
-}
-
-// The total score: the points of every finished round, added up.
-function totalScore(history) {
-  let total = 0;
-  for (const round of history) {
-    total += round.points;
-  }
-  return total;
-}
-
-// ---------------------------------------------------------------------------
-// Audio: a side effect, so it's started and stopped by actions, never by
-// render(). The <audio> element lives outside #app in index.html, so redrawing
-// the screen never destroys it, and one shared element keeps browsers' autoplay
-// rules happy.
-// ---------------------------------------------------------------------------
-
-const player = document.getElementById("player");
-
-// Start playing a preview at a random point inside it. It keeps playing until
-// stopClip() is called; the round timer decides when that is.
-//
-// onStart and onError are callbacks: functions we're handed so we can call
-// them later. onStart() runs once the audio is actually playing; onError(error)
-// runs if it can't load or the browser blocks it. This keeps the audio code
-// free of game logic: it just reports what happened.
-//
-// The <audio> element works through events: we ask it to do something, and it
-// tells us later when that has happened. We react with `player.onX = ...`
-// handlers. Assigning a handler replaces the previous one.
-function playClip(previewUrl, onStart, onError) {
-  stopClip();
-
-  // Runs once the browser has read the clip's header and knows its real length.
-  player.onloadedmetadata = () => {
-    // Pick a start so the clip never runs past the end of the preview.
-    // player.duration is the real length (usually ~30 s, sometimes less).
-    // Math.max(0, ...) covers a preview shorter than the clip itself.
-    const latestStart = Math.max(0, player.duration - CONFIG.clipSeconds);
-    player.currentTime = Math.random() * latestStart;
-
-    // play() returns a promise that fails if the browser blocks playback
-    // (autoplay rules).
-    player.play().catch(onError);
-  };
-
-  // "playing" fires when audio actually starts coming out, but ALSO every time
-  // it resumes after a pause or a buffering stall. We only want the first, so
-  // the handler removes itself.
-  player.onplaying = () => {
-    player.onplaying = null;
-    onStart();
-  };
-
-  // Fires if the file can't be loaded, e.g. an expired preview link.
-  player.onerror = () => onError(player.error);
-
-  player.src = previewUrl; // Point the player at the clip (starts downloading)
-}
-
-// Stop the audio and forget its handlers, so nothing we set up for this clip
-// can still fire later. E.g. without clearing onloadedmetadata, answering
-// before the clip had loaded would start the music during REVEAL.
-function stopClip() {
-  player.onloadedmetadata = null;
-  player.onplaying = null;
-  player.onerror = null;
-  player.pause();
+  // No setState here: the server answers with our pick filled in, and that
+  // redraws the screen with the button highlighted.
+  send({ type: "guess", track_id: trackId });
 }
 
 // ---------------------------------------------------------------------------
@@ -404,8 +182,8 @@ function stopClip() {
 // talks to the outside world, and turns what it hears into state changes.
 // ---------------------------------------------------------------------------
 
-// The open connection. Bookkeeping like roundTimer, so not in `state`; what
-// the screen needs to know about it is in state.connected.
+// The open connection. Bookkeeping, so not in `state`; what the screen needs
+// to know about it is in state.connected.
 let socket = null;
 
 function connect() {
@@ -432,27 +210,66 @@ function send(message) {
 // Everything the server says arrives here and becomes a state change.
 function receive(message) {
   if (message.type === "room") {
-    if (state.phase === "HOME") {
-      // Only move into the lobby if we asked to. Without this check, a room
-      // update already on its way when you pressed Leave would pull you
-      // straight back in.
-      if (state.joining) {
-        setState({ phase: "LOBBY", joining: false, room: message, error: null });
-      }
-    } else {
-      // Already in the room (lobby or playing): just the new player list.
-      setState({ room: message });
-    }
+    receiveRoom(message);
   } else if (message.type === "error") {
     setState({ joining: false, error: message.message });
   }
 }
 
+function receiveRoom(room) {
+  // Not in a room and didn't ask to be: an update that was already on its way
+  // when we pressed Leave. Ignore it, or it would pull us straight back in.
+  if (state.room === null && !state.joining) {
+    return;
+  }
+
+  const changes = { room: room, joining: false };
+
+  // The audio follows the game, but only when it moves on to a new step: not
+  // on an update within one (like our own pick being confirmed), or the clip
+  // would restart.
+  if (isNewStep(state.room, room)) {
+    if (room.phase === "COUNTDOWN") {
+      loadClip(room.game); // First round: download it now, so it's ready to play
+      changes.clipError = null;
+    } else if (room.phase === "PLAYING") {
+      // The first round's clip was loaded during COUNTDOWN. Later rounds come
+      // straight from REVEAL, so load it now: the preloader already
+      // downloaded it, so it comes from the browser's cache, not the network.
+      if (state.room?.phase !== "COUNTDOWN") {
+        loadClip(room.game);
+      }
+      playClip();
+      changes.playingSince = performance.now();
+      changes.clipError = null;
+    } else if (room.phase === "REVEAL") {
+      // The song plays on. Meanwhile, fetch the next round's clip (if there
+      // is a next round).
+      if (room.game.next_clip !== null) {
+        preload(room.game.next_clip.preview_url);
+      }
+    } else {
+      stopClip(); // LOBBY, LOADING, RESULTS
+    }
+  }
+
+  setState(changes);
+}
+
+// Did the game move on (a new phase, or the next round's COUNTDOWN), rather
+// than change within the same step?
+function isNewStep(before, after) {
+  if (before === null || before.phase !== after.phase) {
+    return true;
+  }
+  // ?. ("optional chaining") gives undefined instead of an error when game
+  // is null, e.g. in the lobby.
+  return before.game?.round !== after.game?.round;
+}
+
 function connectionLost() {
-  clearTimeout(roundTimer);
   stopClip();
   setState({
-    phase: "HOME",
     connected: false,
     joining: false,
     room: null,
@@ -479,6 +296,90 @@ function playerToken() {
 }
 
 // ---------------------------------------------------------------------------
+// Audio: a side effect, so it's started and stopped by receiveRoom, never by
+// render(). The <audio> element lives outside #app in index.html, so redrawing
+// the screen never destroys it.
+//
+// Browsers only let a page play sound after the player has clicked something.
+// Here the music starts when a SERVER message arrives, not on a click. Chrome
+// and Firefox are fine with that once there's been any click on the page;
+// Safari wants this same <audio> element to have been played during a click.
+// So Create and Join "unlock" it by playing a moment of silence (unlockAudio).
+// ---------------------------------------------------------------------------
+
+const player = document.getElementById("player");
+player.preload = "auto"; // Download the whole clip when given a src, not just its start
+
+// A WAV file with no sound in it, written out in full as a "data:" URL (the
+// file's bytes, base64-encoded), so there's nothing to download.
+const SILENCE =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=";
+
+function unlockAudio() {
+  player.src = SILENCE;
+  // Nothing to hear, so it doesn't matter if this fails.
+  player.play().catch(() => {});
+}
+
+// Point the player at this round's clip and jump to the start the server
+// picked (the same for everyone). Doesn't play by itself; playClip() does.
+// Called on COUNTDOWN (first round, so it downloads in advance) or right
+// before playClip (later rounds, already in the cache thanks to preload).
+function loadClip(game) {
+  stopClip();
+
+  // Runs once the browser has read the clip's header and knows its real length.
+  player.onloadedmetadata = () => {
+    // The server picked the start assuming a ~30 s preview. If this one is
+    // shorter, start earlier so the whole clip still fits.
+    const latestStart = Math.max(0, player.duration - game.clip_seconds);
+    player.currentTime = Math.min(game.clip_start, latestStart);
+  };
+  // Fires if the file can't be loaded, e.g. an expired preview link.
+  player.onerror = () => clipFailed(player.error);
+
+  player.src = game.preview_url; // Starts downloading
+}
+
+// PLAYING: go. If the clip hasn't finished loading, play() waits for it.
+// play() returns a promise that fails if the browser blocks playback.
+function playClip() {
+  player.play().catch(clipFailed);
+}
+
+// Stop the audio and forget its handlers, so nothing set up for the last clip
+// can still fire later (e.g. an old onerror reporting a failure this round).
+function stopClip() {
+  player.onloadedmetadata = null;
+  player.onerror = null;
+  player.pause();
+}
+
+// Download a clip ahead of time without playing it, using the second <audio>
+// element (index.html), because `player` is still playing the current song.
+//
+// How the downloaded file gets from one element to the other: the browser
+// keeps downloaded files in its HTTP cache, and Deezer's preview files say
+// they may be kept ("cache-control: public, max-age=11731004", about 4.5
+// months). So when `player` later asks for the same link, the browser answers
+// from the cache instead of downloading it again.
+const preloader = document.getElementById("preloader");
+
+function preload(previewUrl) {
+  preloader.src = previewUrl;
+}
+
+// The clip didn't play. The round goes on without it (the server keeps time),
+// so just say so; you can still guess.
+function clipFailed(error) {
+  console.error("Clip failed:", error);
+  const phase = phaseOf(state);
+  if (phase === "COUNTDOWN" || phase === "PLAYING") {
+    setState({ clipError: "Couldn't play the clip. You can still guess!" });
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Rendering: draws the screen from state. It only READS state, never changes
 // it; changes happen in the actions above.
 // ---------------------------------------------------------------------------
@@ -487,7 +388,7 @@ const app = document.getElementById("app");
 
 // Create an element with plain text inside, e.g. el("p", "Hello") → <p>Hello</p>.
 // textContent always treats the text as text, never as HTML, so a song title
-// containing "<" or "&" can't break the page or inject code (XSS).
+// or player name containing "<" or "&" can't break the page or inject code (XSS).
 // className is optional: el("p", "Hi", "message") → <p class="message">Hi</p>.
 // The look of each class lives in style.css; JavaScript only decides WHAT is
 // on screen, CSS decides how it looks.
@@ -520,6 +421,13 @@ function textInput(value, placeholder, maxLength, onInput, onEnter) {
     }
   });
   return input;
+}
+
+// A player's name from their public id. find() returns the first item for
+// which the function is true (or undefined if none is).
+function playerName(room, id) {
+  const player = room.players.find((p) => p.id === id);
+  return player ? player.name : "?";
 }
 
 // --- Centred screens ---
@@ -578,12 +486,19 @@ function lobbyScreen(state) {
   // Only the host starts the game; everyone else waits.
   const start =
     you === host
-      ? button("Start game", loadTracks, "primary")
+      ? button("Start game", startGame, "primary")
       : el("p", "Waiting for the host to start…", "message");
+
+  // The code with a small Copy button beside it.
+  const codeRow = el("div", "", "room-code-row");
+  codeRow.append(
+    el("p", code, "room-code"),
+    button(state.copied ? "Copied!" : "Copy", copyRoomCode, "small"),
+  );
 
   const elements = [
     el("p", "Room code", "label"),
-    el("p", code, "room-code"),
+    codeRow,
     el("p", "Share this code with your friends", "message"),
     el("p", "Players · " + players.length, "label"),
     list,
@@ -597,111 +512,141 @@ function lobbyScreen(state) {
 }
 
 function loadingScreen() {
-  return [el("p", "Loading tracks…", "message")];
+  return [el("p", "Loading songs…", "message")];
 }
 
 function resultsScreen(state) {
-  // <ol> is a numbered list. Each row: title and artist on the left, the
-  // result on the right (two <span>s; the CSS spreads them apart).
-  const list = el("ol", "", "results");
-  for (const round of state.history) {
-    let result;
-    if (round.pickedId === null) {
-      result = "time's up";
-    } else if (round.pickedId === round.answer.id) {
-      result = "+" + round.points + " (" + round.elapsed.toFixed(1) + " s)";
-    } else {
-      result = "✗ wrong";
-    }
+  const { you, host, game } = state.room;
+
+  // The headline: the winner, or a tie if the top two have the same points.
+  // (scores is sorted highest first by the server.)
+  const [first, second] = game.scores; // The first two items (second may be undefined)
+  const headline =
+    second !== undefined && second.points === first.points
+      ? "It's a tie!"
+      : playerName(state.room, first.id) + " wins!";
+
+  // Everyone's final score, in order. <ol> is a numbered list.
+  const ranking = el("ol", "", "results");
+  for (const score of game.scores) {
     const row = el("li");
-    row.append(
-      el("span", round.answer.title + " — " + round.answer.artist),
-      el("span", result),
-    );
-    list.append(row);
+    if (score.id === you) {
+      row.classList.add("you");
+    }
+    row.append(el("span", playerName(state.room, score.id)), el("span", String(score.points)));
+    ranking.append(row);
   }
 
-  // The lobby's Start goes through loadTracks, so every game gets fresh
-  // preview links (Deezer's expire after 15 minutes).
+  // Your own rounds: title and artist on the left, how you did on the right.
+  const rounds = el("ol", "", "results");
+  for (const result of game.history) {
+    let text;
+    if (result.picked === null) {
+      text = "time's up";
+    } else if (result.picked === result.answer.id) {
+      text = "+" + result.points;
+    } else {
+      text = "✗ wrong";
+    }
+    const row = el("li");
+    row.append(el("span", result.answer.title + " — " + result.answer.artist), el("span", text));
+    rounds.append(row);
+  }
+
+  const next =
+    you === host
+      ? button("Back to lobby", backToLobby, "primary")
+      : el("p", "Waiting for the host…", "message");
+
   return [
-    el("p", "Final score", "message"),
-    el("p", String(totalScore(state.history)), "final-score"),
-    list,
-    button("Back to lobby", backToLobby, "primary"),
+    el("h1", headline),
+    el("p", "Final scores", "label"),
+    ranking,
+    el("p", "Your rounds", "label"),
+    rounds,
+    next,
+    button("Leave room", leaveRoom),
   ];
 }
 
-// --- Round screens (PLAYING and REVEAL share one layout) ---
+// --- Round screens (COUNTDOWN, PLAYING and REVEAL share one layout) ---
+
+function countdownScreen(state) {
+  const game = state.room.game;
+  // The choices already show, so everyone can read them while the clip loads,
+  // but they can't be clicked until it plays.
+  const buttons = game.choices.map((choice) => {
+    const choiceButton = el("button", choice.title, "choice");
+    choiceButton.disabled = true;
+    return choiceButton;
+  });
+  return roundLayout(state, [el("p", "Get ready…", "message")], timeBar(null, 0), buttons);
+}
 
 function playingScreen(state) {
-  const started = state.round.startedAt !== null;
+  const game = state.room.game;
+  const picked = game.picked !== null;
 
-  // One button per choice, showing the title only (the artist would give
-  // too much away; it's revealed afterwards). Disabled until the clip plays,
-  // so you can't score by clicking blindly while it loads.
-  const buttons = state.round.choices.map((track) => {
-    const button = el("button", track.title, "choice");
-    button.disabled = !started;
-    button.addEventListener("click", () => pickChoice(track));
-    return button;
+  // One button per choice, showing the title only (the artist would give too
+  // much away; it's revealed afterwards). After you pick, they're all disabled
+  // and yours is highlighted. Whether you were right waits for REVEAL.
+  const buttons = game.choices.map((choice) => {
+    const choiceButton = button(choice.title, () => pickChoice(choice.id), "choice");
+    choiceButton.disabled = picked;
+    if (choice.id === game.picked) {
+      choiceButton.classList.add("picked");
+    }
+    return choiceButton;
   });
 
-  const message = started ? "Which song is this?" : "Loading clip…";
-  return roundLayout(
-    state,
-    [el("p", message, "message")],
-    timeBar(state.round.startedAt),
-    buttons,
-  );
+  const stage = [
+    el("p", picked ? "Locked in! Waiting for the others…" : "Which song is this?", "message"),
+  ];
+  if (state.clipError) {
+    stage.push(el("p", state.clipError, "error"));
+  }
+  return roundLayout(state, stage, timeBar(state.playingSince, game.clip_seconds), buttons);
 }
 
 function revealScreen(state) {
-  // Destructuring: several variables at once from the round object.
-  const { answer, choices, pickedId, elapsed, points } = state.round;
+  // Destructuring: several variables at once from the game object.
+  const { answer, choices, picked, points, round, rounds } = state.room.game;
 
   // The verdict text, and a class to colour it (see .verdict.* in style.css).
   let verdict = "Wrong!";
   let verdictClass = "wrong";
-  if (pickedId === answer.id) {
+  if (picked === answer.id) {
     verdict = "Correct!";
     verdictClass = "correct";
-  } else if (pickedId === null) {
+  } else if (picked === null) {
     verdict = "Time's up!";
-  }
-
-  // toFixed(1) shows one decimal: 2.6312 → "2.6"
-  let pointsText = "+" + points + " points";
-  if (pickedId !== null) {
-    pointsText += " (" + elapsed.toFixed(1) + " s)";
   }
 
   // The same buttons as while playing, but disabled and coloured in place:
   // green for the answer, red for a wrong pick, the rest greyed out.
-  const buttons = choices.map((track) => {
-    const button = el("button", track.title, "choice");
-    button.disabled = true;
-    if (track.id === answer.id) {
-      button.classList.add("correct"); // classList adds a class to the ones it has
-    } else if (track.id === pickedId) {
-      button.classList.add("wrong");
+  const buttons = choices.map((choice) => {
+    const choiceButton = el("button", choice.title, "choice");
+    choiceButton.disabled = true;
+    if (choice.id === answer.id) {
+      choiceButton.classList.add("correct"); // classList adds a class to the ones it has
+    } else if (choice.id === picked) {
+      choiceButton.classList.add("wrong");
     }
-    return button;
+    return choiceButton;
   });
 
-  // After the last round, the button leads to the results instead.
-  const lastRound = state.round.number === state.answers.length;
-  const next = el("button", lastRound ? "See results" : "Next song", "primary");
-  next.addEventListener("click", lastRound ? showResults : startRound);
+  // No Next button: the server moves everyone on together after a few seconds.
+  const next = round === rounds ? "Results coming up…" : "Next song coming up…";
 
   return roundLayout(
     state,
     [
       el("p", verdict, "verdict " + verdictClass), // Two classes, space-separated
       el("p", 'It was "' + answer.title + '" by ' + answer.artist),
-      el("p", pointsText, "message"),
-      next,
+      el("p", "+" + points + " points", "message"),
+      el("p", next, "message"),
     ],
-    timeBar(null), // Empty bar: time's over, but keep the layout from jumping
+    timeBar(null, 0), // Empty bar: time's over, but keep the layout from jumping
     buttons,
   );
 }
@@ -711,8 +656,9 @@ function revealScreen(state) {
 //   sidebar: scores, top right
 //   bottom:  timer bar, then the choice buttons in a grid
 function roundLayout(state, stageItems, bar, buttons) {
+  const game = state.room.game;
   const stage = el("div", "", "stage");
-  stage.append(roundCounter(state), ...stageItems);
+  stage.append(el("p", "Round " + game.round + " / " + game.rounds, "round-counter"), ...stageItems);
 
   const choices = el("div", "", "choices");
   choices.append(...buttons);
@@ -723,43 +669,40 @@ function roundLayout(state, stageItems, bar, buttons) {
   return [stage, scoreSidebar(state), bottom];
 }
 
-// "Round 2 / 5"
-function roundCounter(state) {
-  return el(
-    "p",
-    "Round " + state.round.number + " / " + state.answers.length,
-    "round-counter",
-  );
-}
-
-// The scores, as a list of players. Just "You" for now; in multiplayer, more
-// rows appear here without changing the layout.
+// Every player's total, highest first (the server sorts them). Totals only
+// change at REVEAL: counting a guess earlier would give the answer away.
 function scoreSidebar(state) {
+  const { you, game } = state.room;
   const sidebar = el("aside", "", "sidebar"); // <aside> = content beside the main part
-  const players = el("ul", "", "players");
-  const you = el("li");
-  you.append(el("span", "You"), el("span", String(totalScore(state.history))));
-  players.append(you);
-  sidebar.append(el("h2", "Score"), players);
+  const list = el("ul", "", "players");
+  for (const score of game.scores) {
+    const row = el("li");
+    if (score.id === you) {
+      row.classList.add("you");
+    }
+    row.append(el("span", playerName(state.room, score.id)), el("span", String(score.points)));
+    list.append(row);
+  }
+  sidebar.append(el("h2", "Scores"), list);
   return sidebar;
 }
 
 // A bar that shrinks from full to empty while the clip plays. With startedAt
-// null (clip still loading, or round over) it's just the empty background.
+// null (countdown, or round over) it's just the empty background.
 //
 // The browser animates it by itself (element.animate, the "Web Animations"
 // API), so we don't redraw the screen every fraction of a second. Redrawing
 // would rebuild the answer buttons, and a click that lands mid-rebuild gets lost.
 //
-// It starts from however much time is LEFT, not always from full, so if the
-// screen is ever redrawn mid-round the bar carries on where it was.
-function timeBar(startedAt) {
+// It starts from however much time is LEFT, not always from full, so when the
+// screen is redrawn mid-round (e.g. after you pick) the bar carries on where it was.
+function timeBar(startedAt, clipSeconds) {
   const background = el("div", "", "timebar");
   if (startedAt === null) {
     return background;
   }
 
-  const totalMs = CONFIG.clipSeconds * 1000;
+  const totalMs = clipSeconds * 1000;
   const leftMs = Math.max(0, totalMs - (performance.now() - startedAt));
 
   const fill = el("div", "", "timebar-fill");
@@ -779,7 +722,7 @@ function timeBar(startedAt) {
 function render(state) {
   let elements;
   let layout = "layout-center";
-  switch (state.phase) {
+  switch (phaseOf(state)) {
     case "HOME":
       elements = homeScreen(state);
       break;
@@ -788,6 +731,10 @@ function render(state) {
       break;
     case "LOADING":
       elements = loadingScreen();
+      break;
+    case "COUNTDOWN":
+      elements = countdownScreen(state);
+      layout = "layout-round";
       break;
     case "PLAYING":
       elements = playingScreen(state);

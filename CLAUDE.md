@@ -30,17 +30,22 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
   - Part 2 (Deezer through a FastAPI server that also serves the page, so page and API
     share one origin and there's no CORS) worked; it grew into `server/` and was deleted.
 - Roadmap step 2 (single-player) is **done**.
-- Roadmap step 3 (multiplayer) is in progress; parts 1–2 of 6 are done (see the roadmap in
-  ARCHITECTURE.md). Run from the root: `uvicorn main:app --reload --app-dir server`
+- Roadmap step 3 (multiplayer) is in progress; parts 1–5 of 6 are done (see the roadmap in
+  ARCHITECTURE.md). Run from the root: `uvicorn main:app --reload --app-dir server`.
+  Tests: `pytest` from the root (`pytest.ini` points it at `server/tests`).
   - Server (`server/`): `main.py` (routes only: `GET /api/playlist/{id}/tracks`, `/ws`,
     serves `client/`), `tracks.py` (`Track`), `deezer.py` (provider), `protocol.py`
-    (WebSocket messages as Pydantic models), `rooms.py` (in-memory rooms, broadcast).
-  - Client (`client/script.js`): one `state` object, `setState`, `render(state)`, phases
-    `HOME ⇄ LOBBY → LOADING → PLAYING ⇄ REVEAL → RESULTS → LOBBY`. Rooms and lobby are
-    real; the game itself still runs only in the host's browser.
-  - `deezer.py` still raises FastAPI's `HTTPException`; change it to its own error when
-    the game starts fetching tracks from the WebSocket side (part 4).
-  - Next: part 3, the game engine in `server/game.py` with `pytest` (needs installing).
+    (WebSocket messages as Pydantic models), `rooms.py` (in-memory rooms, the per-room
+    `run_game` task, each player's view, broadcast), `game.py` (the engine: `Game`,
+    `Phase`, `score_for`). `deezer.py` raises its own `DeezerError`/`PlaylistNotFound`.
+  - Client (`client/script.js`): one `state` object (mainly the server's latest `room`
+    message), `setState`, `render(state)`. The screen follows `room.phase` (HOME when not
+    in a room). No game rules in the browser any more; `receiveRoom` loads the clip on
+    COUNTDOWN (round 1) and plays it on PLAYING (`isNewStep`); during REVEAL a hidden
+    `#preloader` `<audio>` downloads `game.next_clip`, so later rounds start straight
+    from REVEAL with no countdown. Actions just `send()` messages.
+  - `GET /api/playlist/{id}/tracks` is no longer used by the client; kept for now.
+  - Next: part 6, playtest on home wifi (`--host 0.0.0.0`), then on Render.
 - Collaboration: present the plan and wait for the owner's go-ahead before writing code
   or installing anything. Then Claude writes small, well-commented pieces; the owner
   reads and runs them.

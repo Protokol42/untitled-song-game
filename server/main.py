@@ -3,7 +3,8 @@ happens in the other files:
     tracks.py   our Track model
     deezer.py   fetching tracks from Deezer
     protocol.py the messages sent over the WebSocket
-    rooms.py    who is in which room
+    rooms.py    who is in which room, running each room's game
+    game.py     the rules of the game
 
 Run from the project root, with the virtual environment active:
     uvicorn main:app --reload --app-dir server
@@ -14,13 +15,21 @@ imports below are plain `import deezer` rather than `from server import ...`.
 
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 import deezer
 import rooms
-from protocol import CreateRoom, JoinRoom, LeaveRoom, client_message
+from protocol import (
+    BackToLobby,
+    CreateRoom,
+    JoinRoom,
+    LeaveRoom,
+    MakeGuess,
+    StartGame,
+    client_message,
+)
 from rooms import RoomError
 from tracks import Track
 
@@ -30,13 +39,23 @@ app = FastAPI()
 # {playlist_id} in the path becomes the function's playlist_id argument.
 # The `int` type hint means FastAPI rejects /api/playlist/abc/tracks with a 422
 # before our code runs.
+#
+# deezer.py raises its own errors; here they become HTTP status codes:
+#   404 Not Found:   the playlist doesn't exist
+#   502 Bad Gateway: anything else, i.e. "the service behind me failed"
+# The more specific except comes first: a PlaylistNotFound is also a DeezerError.
 @app.get("/api/playlist/{playlist_id}/tracks")
 async def playlist_tracks(playlist_id: int) -> list[Track]:
-    return await deezer.get_playlist_tracks(playlist_id)
+    try:
+        return await deezer.get_playlist_tracks(playlist_id)
+    except deezer.PlaylistNotFound:
+        raise HTTPException(status_code=404, detail="Playlist not found")
+    except deezer.DeezerError:
+        raise HTTPException(status_code=502, detail="Deezer request failed")
 
 
-# One player's connection. Like in the WebSocket experiment, this function runs
-# once per open tab, for as long as that tab stays connected.
+# One player's connection. This function runs once per open tab, all at the
+# same time, for as long as that tab stays connected.
 #
 # `room` and `player` are this connection's own variables: which room it's in
 # and as whom. Both are None until it creates or joins a room.
@@ -60,9 +79,9 @@ async def game_socket(websocket: WebSocket) -> None:
                 await rooms.send_error(websocket, f"Invalid message: {first['msg']}")
                 continue  # Back to the top of the loop: wait for the next message
 
-            # `match` picks the case whose pattern fits. CreateRoom() means "is a
-            # CreateRoom". The first case adds a condition with `if`, and comes
-            # first so it's checked before the plain CreateRoom/JoinRoom cases.
+            # `match` picks the FIRST case whose pattern fits. CreateRoom() means
+            # "is a CreateRoom"; `if` adds a condition. The order matters: the
+            # guard cases come before the cases they protect.
             try:
                 match message:
                     case CreateRoom() | JoinRoom() if room is not None:
@@ -73,7 +92,10 @@ async def game_socket(websocket: WebSocket) -> None:
                         room, player = rooms.join_room(
                             message.code, message.token, message.name, websocket
                         )
-                    case LeaveRoom() if room is not None:
+                    # `_` matches anything: every other message needs a room.
+                    case _ if room is None:
+                        raise RoomError("You're not in a room")
+                    case LeaveRoom():
                         rooms.leave_room(room, player)
                         # Tell the others; the browser that left needs no reply,
                         # it goes back to its home screen by itself.
@@ -82,13 +104,22 @@ async def game_socket(websocket: WebSocket) -> None:
                         player = None
                         await rooms.broadcast(left)
                         continue
-                    case LeaveRoom():
-                        continue  # Not in a room: nothing to leave
+                    case StartGame():
+                        rooms.start_game(room, player)
+                    case BackToLobby():
+                        rooms.back_to_lobby(room, player)
+                    case MakeGuess():
+                        # Only the guesser hears about it now (their pick shown).
+                        # The others find out at REVEAL, so nobody can copy.
+                        if rooms.guess(room, player, message.track_id):
+                            await rooms.send_state(room, player)
+                        continue
             except RoomError as error:
                 await rooms.send_error(websocket, str(error))
                 continue
 
-            # Only create and join get here: the room changed, tell everyone in it.
+            # The room changed (created, joined, game started, back to the
+            # lobby): tell everyone in it.
             await rooms.broadcast(room)
 
     except WebSocketDisconnect:

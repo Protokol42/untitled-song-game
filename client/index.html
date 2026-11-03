@@ -18,5 +18,10 @@
          render() never destroys it, and it has no "controls" attribute, so it's
          invisible; script.js drives it. -->
     <audio id="player"></audio>
+
+    <!-- Never plays: it only downloads the next round's clip during REVEAL,
+         while "player" is still busy with the current song. Once downloaded,
+         the clip is in the browser's cache for "player" to use. -->
+    <audio id="preloader" preload="auto" muted></audio>
   </body>
 </html>
