@@ -4,6 +4,7 @@ happens in the other files:
     deezer.py   fetching tracks from Deezer
     protocol.py the messages sent over the WebSocket
     rooms.py    who is in which room, running each room's game
+    playlists.py the playlists players can choose from
     game.py     the rules of the game
 
 Run from the project root, with the virtual environment active:
@@ -23,11 +24,13 @@ import deezer
 import rooms
 from protocol import (
     BackToLobby,
+    ChoosePlaylist,
     CreateRoom,
     JoinRoom,
     LeaveRoom,
     MakeGuess,
     StartGame,
+    VotePlaylist,
     client_message,
 )
 from rooms import RoomError
@@ -104,6 +107,10 @@ async def game_socket(websocket: WebSocket) -> None:
                         player = None
                         await rooms.broadcast(left)
                         continue
+                    case VotePlaylist():
+                        rooms.vote(room, player, message.playlist_id)
+                    case ChoosePlaylist():
+                        rooms.choose_playlist(room, player, message.playlist_id)
                     case StartGame():
                         rooms.start_game(room, player)
                     case BackToLobby():
@@ -118,8 +125,8 @@ async def game_socket(websocket: WebSocket) -> None:
                 await rooms.send_error(websocket, str(error))
                 continue
 
-            # The room changed (created, joined, game started, back to the
-            # lobby): tell everyone in it.
+            # The room changed (created, joined, a vote, game started, back
+            # to the lobby, ...): tell everyone in it.
             await rooms.broadcast(room)
 
     except WebSocketDisconnect:

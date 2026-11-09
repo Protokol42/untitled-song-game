@@ -7,7 +7,8 @@
 // room's phase:
 //
 //   (no room) HOME → enter your name; create a room, or join one with its code
-//   LOBBY     → the code to share, who's in it; the host can Start
+//   LOBBY     → the code to share, who's in it, the playlist menu (everyone
+//               votes, the host chooses); the host can Start
 //   LOADING   → the server is fetching songs
 //   COUNTDOWN → first round only: its clip loads; the choices are shown but
 //               not clickable
@@ -26,7 +27,8 @@ let state = {
   connected: false, // Is the WebSocket to the server open?
   joining: false, // Asked the server to create/join a room, no answer yet
   // The server's latest "room" message (see server/protocol.py, RoomState):
-  // { code, you, host, players, phase, game }. null when not in a room.
+  // { code, you, host, players, playlists, playlist, phase, game }.
+  // null when not in a room.
   room: null,
   error: null,
   // performance.now() when this round's PLAYING arrived, for the timer bar.
@@ -45,7 +47,8 @@ let copiedTimer = null;
 // The name is remembered between visits in localStorage (it stays until
 // cleared). `??` means "if the left side is null, use the right side":
 // getItem gives null the first time.
-const drafts = { name: localStorage.getItem("name") ?? "", code: "" };
+// `search` is what's typed into the lobby's playlist search.
+const drafts = { name: localStorage.getItem("name") ?? "", code: "", search: "" };
 
 // The ONLY way to change state. Because every change goes through here, the
 // screen is redrawn every time and can never show something out of date.
@@ -151,6 +154,27 @@ function copyTheOldWay(text) {
   if (!copied) {
     throw new Error("execCommand('copy') failed");
   }
+}
+
+// The playlist menu. The host's click chooses; anyone else's votes. Like
+// most actions, these only send: the server's reply redraws the menu.
+function votePlaylist(playlistId) {
+  setState({ error: null });
+  send({ type: "vote", playlist_id: playlistId });
+}
+
+// Host only (the server checks too).
+function choosePlaylist(playlistId) {
+  setState({ error: null });
+  send({ type: "choose", playlist_id: playlistId });
+}
+
+// Typing in the playlist search. Not a state change (see drafts), but the
+// list has to be filtered again, so redraw. render() keeps the cursor in the
+// search box (see rememberView).
+function searchPlaylists(text) {
+  drafts.search = text;
+  render(state);
 }
 
 // Host only (the server checks too).
@@ -496,12 +520,18 @@ function lobbyScreen(state) {
     button(state.copied ? "Copied!" : "Copy", copyRoomCode, "small"),
   );
 
+  // Players and playlists side by side; on a narrow screen the playlists
+  // wrap underneath (see .lobby-columns in style.css).
+  const playersColumn = el("div", "", "lobby-column");
+  playersColumn.append(el("p", "Players · " + players.length, "label"), list);
+  const columns = el("div", "", "lobby-columns");
+  columns.append(playersColumn, playlistMenu(state.room));
+
   const elements = [
     el("p", "Room code", "label"),
     codeRow,
     el("p", "Share this code with your friends", "message"),
-    el("p", "Players · " + players.length, "label"),
-    list,
+    columns,
     start,
     button("Leave room", leaveRoom),
   ];
@@ -509,6 +539,107 @@ function lobbyScreen(state) {
     elements.push(el("p", state.error, "error"));
   }
   return elements;
+}
+
+// The lobby's playlist menu: a heading, the search box and a scrolling list.
+// The server sends the playlists already sorted (most votes first); here they
+// are only filtered by the search, which never leaves this browser.
+function playlistMenu(room) {
+  const isHost = room.you === room.host;
+
+  const search = textInput(drafts.search, "Search playlists", 40, searchPlaylists, () => {});
+  search.type = "search"; // Adds a ✕ to clear it, and a search key on phone keyboards
+  search.id = "playlist-search"; // An id, so render() can keep it focused (rememberView)
+  search.setAttribute("aria-label", "Search playlists"); // A name for screen readers
+
+  // includes() is true if the text appears anywhere in the name. Both sides
+  // lower case, so "HITS" finds "00s Hits".
+  const query = drafts.search.trim().toLowerCase();
+  const shown = room.playlists.filter((playlist) =>
+    playlist.name.toLowerCase().includes(query),
+  );
+
+  const list = el("div", "", "playlist-list");
+  list.id = "playlist-list"; // So render() can keep its scroll position
+  for (const playlist of shown) {
+    list.append(playlistRow(room, playlist, isHost));
+  }
+
+  const column = el("div", "", "lobby-column playlist-column");
+  column.append(
+    el("p", "Playlists · " + room.playlists.length, "label"),
+    el("p", isHost ? "Most votes on top. Tap one to play it." : "Most votes on top. Tap one to vote.", "hint"),
+    selectedBox(room, isHost),
+    search,
+    list,
+  );
+  if (query !== "") {
+    const count = shown.length + " of " + room.playlists.length + ' match "' + drafts.search.trim() + '"';
+    column.append(el("p", count, "hint"));
+  }
+  return column;
+}
+
+// One playlist: its name and who voted on the left; labels and the number of
+// votes on the right. The whole row is a button.
+function playlistRow(room, playlist, isHost) {
+  const selected = playlist.id === room.playlist;
+  const yourVote = playlist.voters.includes(room.you);
+  const action = isHost ? choosePlaylist : votePlaylist;
+  const row = button("", () => action(playlist.id), "playlist-row");
+  if (selected) {
+    row.classList.add("selected");
+  }
+  if (yourVote) {
+    row.classList.add("voted");
+  }
+
+  const left = el("span", "", "playlist-text");
+  left.append(el("span", playlist.name, "playlist-name"));
+  if (playlist.voters.length > 0) {
+    // map() turns each voter id into a name; join puts commas between them.
+    const names = playlist.voters.map((id) => (id === room.you ? "you" : playerName(room, id)));
+    left.append(el("span", names.join(", "), "playlist-voters"));
+  }
+
+  const right = el("span", "", "playlist-side");
+  if (selected) {
+    right.append(el("span", isHost ? "Selected" : "Host's pick", "playlist-tag selected"));
+  }
+  if (yourVote) {
+    right.append(el("span", "Your vote", "playlist-tag"));
+  }
+  right.append(el("span", voteCount(playlist)));
+
+  row.append(left, right);
+  return row;
+}
+
+// The playlist the game will use, in a box above the search, so everyone can
+// see it without scrolling, whatever they've searched for. Only a display, not
+// a button: it's also in the list below, where you vote for it.
+function selectedBox(room, isHost) {
+  // find() returns the first playlist whose id matches room.playlist.
+  const playlist = room.playlists.find((p) => p.id === room.playlist);
+
+  const left = el("span", "", "playlist-text");
+  left.append(
+    el("span", isHost ? "Selected" : "Host's pick", "playlist-tag selected"),
+    el("span", playlist.name, "playlist-name"),
+  );
+
+  const box = el("div", "", "playlist-row playlist-current");
+  box.append(left, el("span", voteCount(playlist)));
+  return box;
+}
+
+// "–", "1 vote", "3 votes"
+function voteCount(playlist) {
+  const votes = playlist.voters.length;
+  if (votes === 0) {
+    return "–";
+  }
+  return votes === 1 ? "1 vote" : votes + " votes";
 }
 
 function loadingScreen() {
@@ -748,8 +879,52 @@ function render(state) {
       elements = resultsScreen(state);
       break;
   }
+  const view = rememberView();
   app.className = layout;
   app.replaceChildren(...elements);
+  restoreView(view);
+}
+
+// render() throws the old screen away and builds a new one, so the element
+// you were typing in, or the list you'd scrolled halfway down, is replaced by
+// a fresh copy: no cursor, scrolled to the top. Mostly that doesn't matter,
+// but in the lobby a friend's vote can redraw the screen at any moment.
+//
+// So, for elements that have an id, render() carries three things over from
+// the old element to the new one with the same id: which one is focused,
+// where the cursor is in it, and how far it's scrolled.
+function rememberView() {
+  const focused = document.activeElement; // The element that has the focus
+  const view = { focusedId: focused.id, cursor: null, scrolls: [] };
+  // Only text fields have a cursor; for other elements selectionStart is
+  // undefined (or null for some kinds of input).
+  if (typeof focused.selectionStart === "number") {
+    view.cursor = [focused.selectionStart, focused.selectionEnd];
+  }
+  // querySelectorAll("[id]"): every element inside #app with an id.
+  for (const element of app.querySelectorAll("[id]")) {
+    if (element.scrollTop > 0) {
+      view.scrolls.push([element.id, element.scrollTop]);
+    }
+  }
+  return view;
+}
+
+function restoreView(view) {
+  for (const [id, scrollTop] of view.scrolls) {
+    const element = document.getElementById(id);
+    if (element !== null) {
+      element.scrollTop = scrollTop;
+    }
+  }
+  // focusedId is "" when the focused element had no id (or nothing had focus).
+  const focused = view.focusedId === "" ? null : document.getElementById(view.focusedId);
+  if (focused !== null) {
+    focused.focus({ preventScroll: true }); // Don't scroll the page to it
+    if (view.cursor !== null) {
+      focused.setSelectionRange(...view.cursor);
+    }
+  }
 }
 
 // When the page loads: draw the first screen, then connect to the server.

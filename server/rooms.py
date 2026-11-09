@@ -25,6 +25,7 @@ from fastapi import WebSocket
 
 import deezer
 from game import Game, GameConfig, Phase, Round
+from playlists import PLAYLIST_IDS, PLAYLISTS
 from protocol import (
     AnswerInfo,
     ChoiceInfo,
@@ -33,6 +34,7 @@ from protocol import (
     GameState,
     PlayerInfo,
     PlayerScore,
+    PlaylistInfo,
     RoomState,
     RoundResult,
 )
@@ -41,8 +43,6 @@ from tracks import Track
 # No I or O: too easy to mix up with 1 and 0 when reading a code out loud.
 CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
 CODE_LENGTH = 4  # 24^4 ≈ 330,000 possible codes
-
-PLAYLIST_ID = 9890417302  # Deezer "100% Madeon". Host settings can change this later.
 
 
 # A problem the player should be told about, e.g. "No room with that code".
@@ -69,6 +69,12 @@ class Room:
     # In join order. field(default_factory=list) gives each Room its own new
     # list; a plain `= []` default would be one list shared by every Room.
     players: list[Player] = field(default_factory=list)
+    # The lobby's playlist menu. votes: player id → the playlist id they voted
+    # for; a dict gives each player at most one vote. playlist_id: the host's
+    # choice, which the next game uses. Neither is reset after a game, so the
+    # lobby comes back with the same playlist selected.
+    votes: dict[str, int] = field(default_factory=dict)
+    playlist_id: int = PLAYLISTS[0].id
     game: Game | None = None  # None in the lobby
     # The background task running this room's game (run_game below), or None.
     # Keeping it here also matters for asyncio itself: it only keeps a weak
@@ -141,6 +147,9 @@ def join_room(code: str, token: str, name: str, websocket: WebSocket) -> tuple[R
 
 def leave_room(room: Room, player: Player) -> None:
     room.players.remove(player)
+    # Their vote goes with them. pop(key, None) removes it if it's there and
+    # does nothing if they never voted (del would raise a KeyError).
+    room.votes.pop(player.id, None)
     if not room.players:  # Empty list: the last player left
         del open_rooms[room.code]
         if room.task is not None:
@@ -151,6 +160,31 @@ def leave_room(room: Room, player: Player) -> None:
     if room.game is not None:
         room.game.remove_player(player.id)
         wake_if_round_over(room)
+
+
+# ---------------------------------------------------------------------------
+# The lobby's playlist menu. Also no awaits.
+# ---------------------------------------------------------------------------
+
+# Browsers can send any number, so check it's one of ours: otherwise a
+# hand-made message could make the server fetch any playlist on Deezer.
+def check_playlist(room: Room, playlist_id: int) -> None:
+    if room.phase != "LOBBY":
+        raise RoomError("The playlist can only be changed in the lobby")
+    if playlist_id not in PLAYLIST_IDS:
+        raise RoomError("Unknown playlist")
+
+
+def vote(room: Room, player: Player, playlist_id: int) -> None:
+    check_playlist(room, playlist_id)
+    room.votes[player.id] = playlist_id  # Replaces their earlier vote, if any
+
+
+def choose_playlist(room: Room, player: Player, playlist_id: int) -> None:
+    if player is not room.host:
+        raise RoomError("Only the host can choose the playlist")
+    check_playlist(room, playlist_id)
+    room.playlist_id = playlist_id
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +239,7 @@ def wake_if_round_over(room: Room) -> None:
 async def run_game(room: Room) -> None:
     # Fresh tracks for every game: Deezer's preview links expire after 15 minutes.
     try:
-        tracks = await deezer.get_playlist_tracks(PLAYLIST_ID)
+        tracks = await deezer.get_playlist_tracks(room.playlist_id)
         player_ids = [player.id for player in room.players]
         # random.Random() with no seed: different every game. (Tests pass a seed.)
         room.game = Game(tracks, player_ids, GameConfig(), random.Random())
@@ -300,12 +334,32 @@ def game_state(game: Game, player_id: str) -> GameState:
     )
 
 
+# The playlist menu: every playlist with who voted for it, most votes first.
+def playlist_menu(room: Room) -> list[PlaylistInfo]:
+    # Dicts remember the order keys were added, so voters come out in the
+    # order they first voted.
+    menu = [
+        PlaylistInfo(
+            id=playlist.id,
+            name=playlist.name,
+            voters=[voter for voter, voted_for in room.votes.items() if voted_for == playlist.id],
+        )
+        for playlist in PLAYLISTS
+    ]
+    # sorted() is "stable": items that compare equal keep their order, so
+    # playlists with the same number of votes stay in playlists.py order.
+    # The key is the minus count, because sorted() puts the smallest first.
+    return sorted(menu, key=lambda info: -len(info.voters))
+
+
 def room_state(room: Room, player: Player) -> RoomState:
     return RoomState(
         code=room.code,
         you=player.id,
         host=room.host.id,
         players=[PlayerInfo(id=p.id, name=p.name) for p in room.players],
+        playlists=playlist_menu(room),
+        playlist=room.playlist_id,
         phase=room.phase,
         game=game_state(room.game, player.id) if room.game is not None else None,
     )

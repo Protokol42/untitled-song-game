@@ -112,8 +112,8 @@ Built in roadmap step 3, part 2. Server code: `server/protocol.py` (messages), `
 
 | Direction | Message |
 |---|---|
-| Browser → server | `create` (token, name), `join` (token, name, code), `leave`, `start` (host, in LOBBY), `guess` (track_id), `lobby` (host, in RESULTS) |
-| Server → browser | `room` (code, you, host, players, phase, game), `error` (message) |
+| Browser → server | `create` (token, name), `join` (token, name, code), `leave`, `vote` (playlist_id, in LOBBY), `choose` (playlist_id, host, in LOBBY), `start` (host, in LOBBY), `guess` (track_id), `lobby` (host, in RESULTS) |
+| Server → browser | `room` (code, you, host, players, playlists, playlist, phase, game), `error` (message) |
 
 Invalid messages get an `error` reply; the connection stays open.
 
@@ -135,6 +135,28 @@ Invalid messages get an `error` reply; the connection stays open.
   element downloads it while the revealed song keeps playing. When PLAYING arrives,
   the main player loads the same link from the browser's cache. All clip starts are
   picked when the game is created, so the next one is known in advance.
+
+### Playlists
+
+- **The choice of playlists is `server/playlists.py`**: a list of Deezer playlist ids
+  with the names players see. Adding one is adding a line. The first is selected in a
+  new room; playlists with equal votes keep the list's order.
+- **Everyone votes, the host chooses.** Each player has one vote (`room.votes`, player
+  id → playlist id; voting again moves it, leaving removes it). The host's click sets
+  `room.playlist_id`, which `run_game` fetches. Only ids from `playlists.py` are
+  accepted, so a hand-made message can't make the server fetch any playlist.
+- **Votes and the choice are kept after a game**, so the lobby comes back with the
+  last playlist selected.
+- **The server sorts, the browser filters.** `room.playlists` arrives sorted (most votes
+  first, live: rows can move when someone votes). The search box only filters what's
+  shown and never reaches the server. The list scrolls inside a fixed-height box.
+- **The selected playlist is also shown above the search**, so it's visible without
+  scrolling and whatever the search. It's only a display; it stays in the list too.
+- **Redraws keep focus and scroll:** `render()` rebuilds the screen on every message,
+  so it carries the focus, cursor and scroll position over to the new elements with
+  the same `id` (`rememberView`/`restoreView`). Otherwise a friend's vote would knock
+  you out of the search box. (Not yet tested on an iPhone, which may close the
+  keyboard when the focused field is replaced.)
 
 ---
 
@@ -235,6 +257,8 @@ so success is checked by the presence of `data`, not only the status code.
       `script.js` no longer has game rules: the screen follows `room.phase`, and the
       audio is loaded on COUNTDOWN and played on PLAYING.
    6. Playtest on home wifi, then on Render
+
+   Done early from step 4: the lobby's playlist menu (see [Playlists](#playlists)).
 4. **Polish:** reconnection handling, host settings, animations, sound effects, deployment.
 
 ---

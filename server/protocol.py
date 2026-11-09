@@ -48,6 +48,19 @@ class StartGame(BaseModel):
     type: Literal["start"]
 
 
+# Anyone, in the lobby: vote for the playlist you'd like to play. Each player
+# has one vote; voting again moves it. playlist_id is one from playlists.py.
+class VotePlaylist(BaseModel):
+    type: Literal["vote"]
+    playlist_id: int
+
+
+# Host only, in the lobby: the playlist the next game will use.
+class ChoosePlaylist(BaseModel):
+    type: Literal["choose"]
+    playlist_id: int
+
+
 # Pick a title while the clip plays. track_id is one of the round's choices.
 class MakeGuess(BaseModel):
     type: Literal["guess"]
@@ -64,14 +77,21 @@ class BackToLobby(BaseModel):
 # are about the right model ("name is too long"), not a list of every model
 # that didn't match.
 ClientMessage = Annotated[
-    CreateRoom | JoinRoom | LeaveRoom | StartGame | MakeGuess | BackToLobby,
+    CreateRoom
+    | JoinRoom
+    | LeaveRoom
+    | VotePlaylist
+    | ChoosePlaylist
+    | StartGame
+    | MakeGuess
+    | BackToLobby,
     Field(discriminator="type"),
 ]
 
 # BaseModel classes can check data themselves (CreateRoom.model_validate_json),
 # but ClientMessage is a union, not a class. A TypeAdapter gives any type the
-# same abilities: client_message.validate_json(text) → a CreateRoom, JoinRoom or
-# LeaveRoom, or a ValidationError.
+# same abilities: client_message.validate_json(text) → a CreateRoom, a JoinRoom, ...
+# (one of the models above), or a ValidationError.
 client_message = TypeAdapter(ClientMessage)
 
 
@@ -85,6 +105,13 @@ client_message = TypeAdapter(ClientMessage)
 class PlayerInfo(BaseModel):
     id: str  # Public: safe for everyone in the room to see
     name: str
+
+
+# One row of the lobby's playlist menu.
+class PlaylistInfo(BaseModel):
+    id: int
+    name: str
+    voters: list[str]  # PlayerInfo ids, in the order they voted
 
 
 # A button: the title only. The artist would make it too easy.
@@ -147,6 +174,8 @@ class RoomState(BaseModel):
     you: str  # Your own public id, so the browser knows which player is you
     host: str  # The host's public id
     players: list[PlayerInfo]  # In join order
+    playlists: list[PlaylistInfo]  # Most votes first; ties in playlists.py order
+    playlist: int  # The id of the playlist the host chose
     # LOBBY, LOADING (fetching songs), or the game's phase: COUNTDOWN, PLAYING,
     # REVEAL, RESULTS.
     phase: str
