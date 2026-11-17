@@ -13,6 +13,12 @@ time and only switches to another (e.g. another player's connection) at an
 `await`. None of the functions that change rooms below contain an `await`, so
 "check the name is free, then add the player" can never be interrupted by a
 second player joining with the same name in between.
+
+Reconnecting: a player and their connection are two different things. When a
+connection drops, the player stays in the room for RECONNECT_SECONDS with no
+connection (websocket None), keeping their name, avatar and score. If the same
+browser tab comes back in time with its secret token (`rejoin`), it takes over
+that player again. If not, they're removed as if they had left.
 """
 
 import asyncio
@@ -50,6 +56,11 @@ CODE_LENGTH = 4  # 24^4 ≈ 330,000 possible codes
 # numbers can never disagree.
 MAX_PLAYERS = len(AVATARS)
 
+# How long a disconnected player keeps their place (a locked phone, a wifi
+# blip, a refresh). Long enough to forgive most of those; past it, they're
+# probably gone for good. Tests make it tiny.
+RECONNECT_SECONDS = 180
+
 
 # A problem the player should be told about, e.g. "No room with that code".
 # Raising it lets the functions below stop early; the /ws route catches it
@@ -67,7 +78,16 @@ class Player:
     token: str  # Secret, never sent to anyone (see protocol.py)
     name: str
     avatar: str  # One of avatars.py's ids; no one else in the room has it
-    websocket: WebSocket  # This player's connection, to send them messages
+    # This player's connection, to send them messages. None while they're
+    # disconnected and we're waiting for them to come back.
+    websocket: WebSocket | None
+    # While disconnected: the background task that removes them once
+    # RECONNECT_SECONDS have passed (drop_later). Cancelled if they rejoin.
+    drop_task: asyncio.Task | None = None
+
+    @property
+    def connected(self) -> bool:
+        return self.websocket is not None
 
 
 @dataclass
@@ -91,12 +111,17 @@ class Room:
     # run_game, which would otherwise wait for the clip's full time.
     round_over: asyncio.Event = field(default_factory=asyncio.Event)
 
-    # The host is simply whoever has been in the room longest: the first in
-    # the list. If the host leaves, the next player becomes host by itself.
+    # The host is whoever has been in the room longest AND is connected: the
+    # first connected player in the list. If the host leaves or their phone
+    # locks, the next player becomes host by itself, so nobody is stuck
+    # waiting for a Start button; when the old host comes back, they're first
+    # in the list again and get it back. (If nobody is connected, it doesn't
+    # matter who: fall back to the first player.)
     # @property makes it read like a field: room.host, not room.host().
     @property
     def host(self) -> Player:
-        return self.players[0]
+        # next(generator, default): the first matching item, or the default.
+        return next((p for p in self.players if p.connected), self.players[0])
 
     # Where the room is, as one word for the browser.
     @property
@@ -183,6 +208,49 @@ def pick_avatar(room: Room, player: Player, avatar: str) -> None:
     if any(other.avatar == avatar and other is not player for other in room.players):
         raise RoomError("Someone already has that one")
     player.avatar = avatar  # Your old one is free again by itself (free_avatar)
+
+
+# The same browser tab coming back (after a wifi blip, a locked phone, a
+# refresh). The token proves it's them: only their tab knows it, everyone else
+# only ever sees the public id. Works in any phase, mid-game too, because it's
+# not a new player joining, it's an existing one getting a new connection.
+#
+# Returns the connection this player had before, if it's still attached, so
+# main.py can close it: that happens when the server hasn't noticed yet that
+# the old one died, or when the tab was duplicated (a duplicate tab copies
+# sessionStorage, token and all). Otherwise None.
+def rejoin_room(code: str, token: str, websocket: WebSocket) -> tuple[Room, Player, WebSocket | None]:
+    room = open_rooms.get(code)
+    if room is None:
+        raise RoomError("That room has closed")
+    player = next((p for p in room.players if p.token == token), None)
+    if player is None:
+        raise RoomError("You've been away too long and left that room")
+    if player.drop_task is not None:
+        player.drop_task.cancel()  # They're back: don't remove them
+        player.drop_task = None
+    old = player.websocket
+    player.websocket = websocket
+    return room, player, old
+
+
+# Their connection dropped: keep their place for RECONNECT_SECONDS. Unlike
+# leave_room they stay in room.players and in the game, so their score and
+# avatar wait for them.
+def disconnect(room: Room, player: Player) -> None:
+    player.websocket = None
+    player.drop_task = asyncio.create_task(drop_later(room, player))
+
+
+async def drop_later(room: Room, player: Player) -> None:
+    await asyncio.sleep(RECONNECT_SECONDS)
+    # Normally rejoin_room cancels this task, so we never get here. Checking
+    # again anyway costs nothing and makes sure we never remove someone who
+    # is back.
+    if player in room.players and not player.connected:
+        player.drop_task = None
+        leave_room(room, player)
+        await broadcast(room)
 
 
 def leave_room(room: Room, player: Player) -> None:
@@ -344,10 +412,19 @@ def round_result(played: Round, player_id: str) -> RoundResult:
     )
 
 
-def game_state(game: Game, player_id: str) -> GameState:
+# `now` is time.monotonic() (passed in, like the engine's, so tests can choose it).
+def game_state(game: Game, player_id: str, now: float) -> GameState:
     current = game.round
     revealed = game.phase in (Phase.REVEAL, Phase.RESULTS)
     guess = current.guesses.get(player_id)
+
+    # How far into the round we are, while it plays. Normally the browser
+    # starts its timer when PLAYING arrives, but someone rejoining mid-round
+    # needs to know they've arrived late: their timer bar and clip start this
+    # far in.
+    elapsed = None
+    if game.phase == Phase.PLAYING:
+        elapsed = now - current.started_at
 
     # During REVEAL, the next round's clip, to download in advance. Only its
     # link and start: the track's title would give the next answer away.
@@ -377,6 +454,7 @@ def game_state(game: Game, player_id: str) -> GameState:
             if revealed
             else None
         ),
+        elapsed=elapsed,
         answer=answer_info(current.answer) if revealed else None,
         points=(guess.points if guess else 0) if revealed else None,
         scores=[PlayerScore(id=player_id, points=points) for player_id, points in game.scores()],
@@ -407,11 +485,18 @@ def room_state(room: Room, player: Player) -> RoomState:
         code=room.code,
         you=player.id,
         host=room.host.id,
-        players=[PlayerInfo(id=p.id, name=p.name, avatar=p.avatar) for p in room.players],
+        players=[
+            PlayerInfo(id=p.id, name=p.name, avatar=p.avatar, connected=p.connected)
+            for p in room.players
+        ],
         playlists=playlist_menu(room),
         playlist=room.playlist_id,
         phase=room.phase,
-        game=game_state(room.game, player.id) if room.game is not None else None,
+        game=(
+            game_state(room.game, player.id, now=time.monotonic())
+            if room.game is not None
+            else None
+        ),
     )
 
 
@@ -420,11 +505,16 @@ def room_state(room: Room, player: Player) -> RoomState:
 # ---------------------------------------------------------------------------
 
 async def send_state(room: Room, player: Player) -> None:
+    # Disconnected: nothing to send to. They get the whole room again when
+    # they rejoin, so they don't miss anything that matters.
+    websocket = player.websocket
+    if websocket is None:
+        return
     try:
-        await player.websocket.send_text(room_state(room, player).model_dump_json())
+        await websocket.send_text(room_state(room, player).model_dump_json())
     except Exception:
         # Their connection just died. Their own /ws handler will notice and
-        # remove them; don't let one broken connection stop the others
+        # call disconnect; don't let one broken connection stop the others
         # from getting the update.
         pass
 
@@ -444,6 +534,8 @@ async def send_error(websocket: WebSocket, message: str) -> None:
 
 async def broadcast_error(room: Room, message: str) -> None:
     for player in list(room.players):
+        if player.websocket is None:
+            continue  # Disconnected (see send_state)
         try:
             await send_error(player.websocket, message)
         except Exception:

@@ -39,6 +39,14 @@ class JoinRoom(BaseModel):
     code: RoomCode  # "kxqp " is accepted as "KXQP"
 
 
+# Coming back after the connection dropped (or the page was refreshed): the
+# same tab, proving it's the same player with its token. Any phase.
+class RejoinRoom(BaseModel):
+    type: Literal["rejoin"]
+    token: Token
+    code: RoomCode
+
+
 class LeaveRoom(BaseModel):
     type: Literal["leave"]
 
@@ -86,6 +94,7 @@ class BackToLobby(BaseModel):
 ClientMessage = Annotated[
     CreateRoom
     | JoinRoom
+    | RejoinRoom
     | LeaveRoom
     | VotePlaylist
     | ChoosePlaylist
@@ -114,6 +123,9 @@ class PlayerInfo(BaseModel):
     id: str  # Public: safe for everyone in the room to see
     name: str
     avatar: str  # An id from avatars.py; the browser decides how it looks
+    # False while their connection is down and the room keeps their place
+    # (see RECONNECT_SECONDS in rooms.py).
+    connected: bool
 
 
 # One row of the lobby's playlist menu.
@@ -177,6 +189,9 @@ class GameState(BaseModel):
     # What everyone picked: PlayerInfo id → track id. None until REVEAL, so
     # nobody can wait and copy a quicker player.
     picks: dict[str, int] | None
+    # Seconds since this round's clip started, during PLAYING (None otherwise).
+    # For someone who rejoins mid-round: their timer and clip start this far in.
+    elapsed: float | None
     answer: AnswerInfo | None  # None until REVEAL
     points: int | None  # Your points for this round; None until REVEAL
     scores: list[PlayerScore]  # Revealed rounds only, highest first
@@ -201,3 +216,17 @@ class RoomState(BaseModel):
 class ErrorMessage(BaseModel):
     type: Literal["error"] = "error"
     message: str  # Shown to the player as is
+
+
+# ---------------------------------------------------------------------------
+# WebSocket close codes
+#
+# When a connection is closed on purpose, the closer can give a number saying
+# why. 1000–2999 are defined by the WebSocket standard; 4000–4999 are free for
+# apps to use. The browser sees it as event.code in its onclose handler.
+# ---------------------------------------------------------------------------
+
+# This player was taken over by a newer connection with the same token (e.g.
+# a duplicated tab). The old tab must NOT reconnect, or the two would keep
+# taking the player back from each other.
+CLOSE_REPLACED = 4000

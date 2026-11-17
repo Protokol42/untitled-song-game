@@ -1,7 +1,7 @@
 """Tests for avatars, the room size limit and who sees whose picks (server/rooms.py).
 
-Like test_rooms.py, nothing here sends anything, so None stands in for each
-player's WebSocket.
+Like test_rooms.py, nothing here sends anything, so a plain object() stands
+in for each player's WebSocket.
 """
 
 import random
@@ -24,9 +24,9 @@ def empty_rooms():
 
 # A room with `count` players: the host "P0", then "P1", "P2", ...
 def room_of(count):
-    room, _ = rooms.create_room("t0", "P0", None)
+    room, _ = rooms.create_room("t0", "P0", object())
     for i in range(1, count):
-        rooms.join_room(room.code, f"t{i}", f"P{i}", None)
+        rooms.join_room(room.code, f"t{i}", f"P{i}", object())
     return room
 
 
@@ -51,7 +51,7 @@ def test_everyone_gets_a_different_avatar():
 def test_a_full_room_turns_people_away():
     room = room_of(MAX_PLAYERS)
     with pytest.raises(RoomError):
-        rooms.join_room(room.code, "late", "Late", None)
+        rooms.join_room(room.code, "late", "Late", object())
     assert len(room.players) == MAX_PLAYERS
 
 
@@ -59,7 +59,7 @@ def test_leaving_frees_your_avatar_and_your_place():
     room = room_of(MAX_PLAYERS)
     leaver = room.players[3]
     rooms.leave_room(room, leaver)
-    _, newcomer = rooms.join_room(room.code, "new", "New", None)
+    _, newcomer = rooms.join_room(room.code, "new", "New", object())
     # The only avatar left over was the leaver's.
     assert newcomer.avatar == leaver.avatar
     assert sorted(avatars_in(room)) == sorted(AVATARS)
@@ -138,7 +138,7 @@ def test_while_playing_you_see_who_answered_but_not_what():
     first_choice = game.round.choices[0].id
     game.guess("p2", first_choice, now=1)
 
-    seen_by_p1 = rooms.game_state(game, "p1")
+    seen_by_p1 = rooms.game_state(game, "p1", now=1)
     assert seen_by_p1.answered == ["p2"]
     assert seen_by_p1.picks is None
     assert seen_by_p1.picked is None  # p1 hasn't answered
@@ -151,6 +151,6 @@ def test_at_reveal_everyone_sees_every_pick():
     game.guess("p1", second, now=2)
     game.time_up()  # p3 never answers
 
-    seen_by_p3 = rooms.game_state(game, "p3")
+    seen_by_p3 = rooms.game_state(game, "p3", now=2)
     assert seen_by_p3.answered == ["p2", "p1"]  # In the order they answered
     assert seen_by_p3.picks == {"p2": first, "p1": second}

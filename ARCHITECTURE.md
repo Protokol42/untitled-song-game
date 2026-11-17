@@ -98,8 +98,9 @@ Built in roadmap step 3, part 2. Server code: `server/protocol.py` (messages), `
 
 - **Room codes** are 4 letters without I and O (easy to mix up with 1 and 0), made
   with `secrets` so they can't be predicted.
-- **The host is whoever joined first** (`players[0]`). When the host leaves, the next
-  player becomes host without any extra code.
+- **The host is the first *connected* player** (`Room.host`). When the host leaves or
+  disconnects, the next player becomes host without any extra code, so nobody waits on a
+  locked phone for the Start button; when the host reconnects, they're first again.
 - **Names** are 1–20 characters and unique within a room (ignoring case).
 - **Avatars:** each player gets a random avatar no one else in the room has, from
   `server/avatars.py` (8 ids). The server only sends the id; `script.js` decides the look
@@ -112,7 +113,30 @@ Built in roadmap step 3, part 2. Server code: `server/protocol.py` (messages), `
   once, the first gets it (no `await` between check and take) and the second gets an error.
 - **At most 8 players** (`MAX_PLAYERS = len(AVATARS)` in `rooms.py`): one avatar each.
 - **An empty room is deleted.**
-- **Disconnecting counts as leaving, for now.** Rejoining with the token is roadmap step 4.
+- **Reconnecting: a player outlives their connection.** When a connection drops, the
+  player stays in the room with `websocket = None` (shown as `connected: false`) for
+  `RECONNECT_SECONDS` (180, in `rooms.py`), keeping their name, avatar, votes and score.
+  A background task (`drop_later`) removes them when the time runs out. The same tab
+  comes back with `rejoin` (token, code) in any phase, mid-game too, and takes over the
+  player; the token proves who they are, since nobody else ever sees it.
+  - **Late-noticed disconnects:** the server can notice a dead connection *after* the
+    player has already rejoined on a new one. So a disconnect only counts if the player
+    is still on that connection (`player.websocket is websocket` in `main.py`).
+  - **Two tabs, one token** (a duplicated tab copies `sessionStorage`): the newer one
+    wins, and the server closes the older one with close code 4000 (`CLOSE_REPLACED`)
+    so it knows not to reconnect and take the player back.
+  - **Rounds run their full time** while someone is disconnected: they can't answer, so
+    "everyone has answered" can't happen. Kept that way so the engine stays unchanged.
+  - **Rejoining mid-round:** `game.elapsed` (seconds since the round's clip started,
+    during PLAYING) lets the browser start its timer and clip that far in.
+  - **In the browser:** the room code is kept in `sessionStorage` (like the token).
+    When the connection drops, the screen stays with a "Reconnecting…" banner while
+    `connect()` retries with exponential backoff (1 s, 2 s, 4 s, then every 5 s) and
+    sends `rejoin` once it's back. After a *refresh*, the home screen offers a "Rejoin
+    room ABCD" button instead of rejoining by itself: browsers only allow sound after a
+    click, and that click unlocks it. A refused rejoin (room closed, or away too long)
+    goes back to HOME with the server's message. Disconnected players are faded with
+    "reconnecting…".
 - **No locks needed:** asyncio only switches between connections at an `await`, and the
   functions that change rooms contain none.
 - The browser only moves from HOME to LOBBY when it asked to join (`state.joining`), so
@@ -122,7 +146,7 @@ Built in roadmap step 3, part 2. Server code: `server/protocol.py` (messages), `
 
 | Direction | Message |
 |---|---|
-| Browser → server | `create` (token, name), `join` (token, name, code), `leave`, `vote` (playlist_id, in LOBBY), `choose` (playlist_id, host, in LOBBY), `avatar` (avatar, a free one, in LOBBY), `start` (host, in LOBBY), `guess` (track_id), `lobby` (host, in RESULTS) |
+| Browser → server | `create` (token, name), `join` (token, name, code), `rejoin` (token, code, any phase), `leave`, `vote` (playlist_id, in LOBBY), `choose` (playlist_id, host, in LOBBY), `avatar` (avatar, a free one, in LOBBY), `start` (host, in LOBBY), `guess` (track_id), `lobby` (host, in RESULTS) |
 | Server → browser | `room` (code, you, host, players, playlists, playlist, phase, game), `error` (message) |
 
 Invalid messages get an `error` reply; the connection stays open.
@@ -273,7 +297,8 @@ so success is checked by the presence of `data`, not only the status code.
 
    Done early from step 4: the lobby's playlist menu (see [Playlists](#playlists)), and
    avatars showing who answered and who picked what (see [Rooms](#rooms)).
-4. **Polish:** reconnection handling, host settings, animations, sound effects, deployment.
+4. **Polish:** ✅ reconnection handling (see [Rooms](#rooms)), host settings, animations,
+   sound effects, deployment.
 
 ---
 

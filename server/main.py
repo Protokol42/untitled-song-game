@@ -24,6 +24,7 @@ from pydantic import ValidationError
 import deezer
 import rooms
 from protocol import (
+    CLOSE_REPLACED,
     BackToLobby,
     ChoosePlaylist,
     CreateRoom,
@@ -31,6 +32,7 @@ from protocol import (
     LeaveRoom,
     MakeGuess,
     PickAvatar,
+    RejoinRoom,
     StartGame,
     VotePlaylist,
     client_message,
@@ -89,8 +91,23 @@ async def game_socket(websocket: WebSocket) -> None:
             # guard cases come before the cases they protect.
             try:
                 match message:
-                    case CreateRoom() | JoinRoom() if room is not None:
+                    case CreateRoom() | JoinRoom() | RejoinRoom() if room is not None:
                         raise RoomError("You're already in a room")
+                    case RejoinRoom():
+                        room, player, old = rooms.rejoin_room(
+                            message.code, message.token, websocket
+                        )
+                        if old is not None:
+                            # The player still had another connection. Close
+                            # it with our "replaced" code so that tab knows
+                            # not to reconnect (see CLOSE_REPLACED). Its own
+                            # handler then sees a disconnect and ignores it,
+                            # because the player isn't on that connection any
+                            # more (the check at the bottom).
+                            try:
+                                await old.close(code=CLOSE_REPLACED)
+                            except Exception:
+                                pass  # Already dead: nothing to close
                     case CreateRoom():
                         room, player = rooms.create_room(message.token, message.name, websocket)
                     case JoinRoom():
@@ -135,10 +152,15 @@ async def game_socket(websocket: WebSocket) -> None:
             await rooms.broadcast(room)
 
     except WebSocketDisconnect:
-        # The tab closed, refreshed or lost its network. For now that counts as
-        # leaving (rejoining with the token comes in roadmap step 4).
-        if room is not None:
-            rooms.leave_room(room, player)
+        # The tab closed, refreshed or lost its network. Don't remove the
+        # player yet: keep their place for a while in case they come back
+        # (rooms.disconnect starts that timer).
+        #
+        # `player.websocket is websocket`: only if the player is still on THIS
+        # connection. If they've already rejoined on a new one (the server can
+        # notice a dead connection late), this old one dying means nothing.
+        if room is not None and player.websocket is websocket:
+            rooms.disconnect(room, player)
             await rooms.broadcast(room)
 
 

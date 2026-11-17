@@ -56,6 +56,14 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
     free one (`avatar` message, `pick_avatar`; taken ones are unclickable). While the clip plays everyone sees
     who has answered (`game.answered`); at REVEAL, avatars sit on the choice each player
     picked (`game.picks`).
+  - Reconnection (step 4) is **done**. Server: a disconnected player keeps their
+    place for `RECONNECT_SECONDS` (180) and comes back with `rejoin` (token, code);
+    host = first connected player; `PlayerInfo.connected`, `game.elapsed`; close code
+    4000 (`CLOSE_REPLACED`) for a tab that was taken over. Tests in
+    `server/tests/test_reconnect.py`. Client: room code in `sessionStorage`,
+    auto-reconnect with backoff and a banner (`connected`/`connectionLost`), a
+    "Rejoin room" button after a refresh (the click unlocks audio), clip and timer
+    start `elapsed` seconds in, disconnected players faded.
   - Next: part 6, playtest on home wifi (`--host 0.0.0.0`), then on Render.
 - Collaboration: present the plan and wait for the owner's go-ahead before writing code
   or installing anything. Then Claude writes small, well-commented pieces; the owner

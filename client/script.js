@@ -7,6 +7,7 @@
 // room's phase:
 //
 //   (no room) HOME → enter your name; create a room, or join one with its code
+//               (or, after a refresh, rejoin the room this tab was in)
 //   LOBBY     → the code to share, who's in it, the playlist menu (everyone
 //               votes, the host chooses); the host can Start. Everyone has
 //               their own avatar (an animal), handed out by the server.
@@ -28,7 +29,13 @@
 
 let state = {
   connected: false, // Is the WebSocket to the server open?
-  joining: false, // Asked the server to create/join a room, no answer yet
+  joining: false, // Asked the server to create/join/rejoin a room, no answer yet
+  // Asked to rejoin (after a refresh or a dropped connection), no answer yet.
+  // If the answer is an error, the room is gone for us: back to HOME.
+  rejoining: false,
+  // The connection dropped while in a room and we're trying to get it back.
+  // The screen stays as it was, with a banner on top.
+  reconnecting: false,
   // The server's latest "room" message (see server/protocol.py, RoomState):
   // { code, you, host, players, playlists, playlist, phase, game }.
   // null when not in a room.
@@ -114,7 +121,33 @@ function joinRoom() {
 function leaveRoom() {
   send({ type: "leave" });
   stopClip();
-  setState({ room: null, error: null });
+  forgetRoom();
+  setState({ room: null, reconnecting: false, error: null });
+}
+
+// After a refresh: the "Rejoin room ABCD" button on the home screen. It's a
+// click, so it also unlocks the audio, which is why we don't rejoin by
+// ourselves after a refresh (see Audio).
+function rejoinRoom() {
+  unlockAudio();
+  setState({ joining: true, rejoining: true, error: null });
+  send({ type: "rejoin", token: playerToken(), code: savedRoom() });
+}
+
+// --- The room we're in, remembered in sessionStorage ---
+// Like the token: it survives a refresh of this tab, and other tabs don't see
+// it. That's all a refreshed page needs to offer "Rejoin room ABCD".
+
+function rememberRoom(code) {
+  sessionStorage.setItem("room", code);
+}
+
+function forgetRoom() {
+  sessionStorage.removeItem("room");
+}
+
+function savedRoom() {
+  return sessionStorage.getItem("room"); // null if there's none
 }
 
 // Copy the room code to the clipboard, so it can be pasted into a chat.
@@ -220,31 +253,106 @@ function pickChoice(trackId) {
 // to know about it is in state.connected.
 let socket = null;
 
+// How long to wait before the next attempt to reconnect, in ms. It doubles
+// after every failed attempt (1 s, 2 s, 4 s, then 5 s from then on), so a
+// server that's down isn't flooded with attempts, and goes back to 1 s once
+// connected. This pattern is called "exponential backoff".
+const FIRST_RETRY_MS = 1000;
+const MAX_RETRY_MS = 5000;
+let retryMs = FIRST_RETRY_MS;
+
+// Must match CLOSE_REPLACED in server/protocol.py: the server closed this
+// connection because the same player rejoined from another tab (e.g. a
+// duplicated one). Reconnecting would take the player back from that tab,
+// which would then take it back again, forever.
+const CLOSE_REPLACED = 4000;
+
 function connect() {
   // ws:// normally, wss:// (encrypted) when the page itself came over https://,
   // as it will once deployed. location.host is the server that sent this page.
   const scheme = location.protocol === "https:" ? "wss://" : "ws://";
   socket = new WebSocket(scheme + location.host + "/ws");
 
-  socket.onopen = () => setState({ connected: true });
+  socket.onopen = connected;
   // The server sends JSON text; JSON.parse turns it into an object.
   socket.onmessage = (event) => receive(JSON.parse(event.data));
-  // The server stopped or restarted, or the network dropped. The server has
-  // already counted us as gone from the room, so back to the start. (Coming
-  // back into the room automatically is roadmap step 4.)
-  socket.onclose = connectionLost;
+  // The server stopped or restarted, the network dropped, or the phone went
+  // to sleep. event.code says why, if the server closed it on purpose.
+  socket.onclose = (event) => connectionLost(event.code);
+}
+
+function connected() {
+  retryMs = FIRST_RETRY_MS;
+  // We were in a room when the connection dropped: ask for our place back.
+  // The page never reloaded, so the audio is still unlocked and the game can
+  // carry on by itself (unlike after a refresh, see rejoinRoom).
+  if (state.room !== null) {
+    send({ type: "rejoin", token: playerToken(), code: state.room.code });
+    setState({ connected: true, joining: true, rejoining: true });
+  } else {
+    setState({ connected: true });
+  }
+}
+
+function connectionLost(closeCode) {
+  if (closeCode === CLOSE_REPLACED) {
+    // This room is now open in another tab. Back to the start, and don't
+    // offer to rejoin (that would take it back from the other tab).
+    stopClip();
+    forgetRoom();
+    setState({
+      connected: false,
+      joining: false,
+      rejoining: false,
+      reconnecting: false,
+      room: null,
+      error: "You opened this room in another tab, so this one left it.",
+    });
+  } else {
+    // Keep the room on screen (and the music playing, if it still can):
+    // the server keeps our place for a few minutes. connected() rejoins.
+    setState({
+      connected: false,
+      joining: false,
+      rejoining: false,
+      reconnecting: state.room !== null,
+    });
+  }
+
+  // Try again later; each failed attempt ends up back here, waiting longer.
+  setTimeout(connect, retryMs);
+  retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
 }
 
 // Send a message to the server. send() only takes text, so turn the object
 // into JSON text first. Every message we can send is listed in protocol.py.
+//
+// Only while the connection is open: while reconnecting, a click (Leave, a
+// vote) has nowhere to go, and socket.send would throw an error while the
+// socket is still connecting. The server sends the latest state on rejoin
+// anyway.
 function send(message) {
-  socket.send(JSON.stringify(message));
+  if (socket.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify(message));
+  }
 }
 
 // Everything the server says arrives here and becomes a state change.
 function receive(message) {
   if (message.type === "room") {
     receiveRoom(message);
+  } else if (message.type === "error" && state.rejoining) {
+    // Rejoin refused: the room closed (e.g. the server restarted) or we were
+    // away too long and the server removed us. Nothing to go back to.
+    stopClip();
+    forgetRoom();
+    setState({
+      joining: false,
+      rejoining: false,
+      reconnecting: false,
+      room: null,
+      error: message.message,
+    });
   } else if (message.type === "error") {
     setState({ joining: false, error: message.message });
   }
@@ -257,7 +365,9 @@ function receiveRoom(room) {
     return;
   }
 
-  const changes = { room: room, joining: false };
+  // In a room (again): remember its code, so a refresh can offer to rejoin.
+  rememberRoom(room.code);
+  const changes = { room: room, joining: false, rejoining: false, reconnecting: false };
 
   // The audio follows the game, but only when it moves on to a new step: not
   // on an update within one (like our own pick being confirmed), or the clip
@@ -267,14 +377,19 @@ function receiveRoom(room) {
       loadClip(room.game); // First round: download it now, so it's ready to play
       changes.clipError = null;
     } else if (room.phase === "PLAYING") {
+      // How far into the round we are: about 0 normally, more if we've just
+      // rejoined mid-round. Both the clip and the timer bar start that far in.
+      const elapsed = room.game.elapsed;
       // The first round's clip was loaded during COUNTDOWN. Later rounds come
       // straight from REVEAL, so load it now: the preloader already
       // downloaded it, so it comes from the browser's cache, not the network.
-      if (state.room?.phase !== "COUNTDOWN") {
-        loadClip(room.game);
+      // Also load it if we're more than a moment late, so it starts further in.
+      if (state.room?.phase !== "COUNTDOWN" || elapsed > 1) {
+        loadClip(room.game, elapsed);
       }
       playClip();
-      changes.playingSince = performance.now();
+      // performance.now() counts milliseconds; elapsed is in seconds.
+      changes.playingSince = performance.now() - elapsed * 1000;
       changes.clipError = null;
     } else if (room.phase === "REVEAL") {
       // The song plays on. Meanwhile, fetch the next round's clip (if there
@@ -299,16 +414,6 @@ function isNewStep(before, after) {
   // ?. ("optional chaining") gives undefined instead of an error when game
   // is null, e.g. in the lobby.
   return before.game?.round !== after.game?.round;
-}
-
-function connectionLost() {
-  stopClip();
-  setState({
-    connected: false,
-    joining: false,
-    room: null,
-    error: "Lost the connection to the server. Refresh the page to reconnect.",
-  });
 }
 
 // This browser tab's secret token (see server/protocol.py), made once and then
@@ -359,7 +464,8 @@ function unlockAudio() {
 // picked (the same for everyone). Doesn't play by itself; playClip() does.
 // Called on COUNTDOWN (first round, so it downloads in advance) or right
 // before playClip (later rounds, already in the cache thanks to preload).
-function loadClip(game) {
+// `late`: seconds the round has already been playing, when we rejoin mid-round.
+function loadClip(game, late = 0) {
   stopClip();
 
   // Runs once the browser has read the clip's header and knows its real length.
@@ -367,7 +473,7 @@ function loadClip(game) {
     // The server picked the start assuming a ~30 s preview. If this one is
     // shorter, start earlier so the whole clip still fits.
     const latestStart = Math.max(0, player.duration - game.clip_seconds);
-    player.currentTime = Math.min(game.clip_start, latestStart);
+    player.currentTime = Math.min(game.clip_start, latestStart) + late;
   };
   // Fires if the file can't be loaded, e.g. an expired preview link.
   player.onerror = () => clipFailed(player.error);
@@ -509,12 +615,17 @@ function avatar(player, size = "") {
   return avatarCircle(player.avatar, player.name, size);
 }
 
-// An avatar and a name side by side, for lists of players.
+// An avatar and a name side by side, for lists of players. Faded while the
+// player's connection is down (see .away in style.css).
 function playerLabel(room, id) {
   const label = el("span", "", "player-label");
   const player = playerById(room, id);
   if (player) {
     label.append(avatar(player));
+    if (!player.connected) {
+      label.classList.add("away");
+      label.title = player.name + " is reconnecting…";
+    }
   }
   label.append(el("span", playerName(room, id)));
   return label;
@@ -544,6 +655,17 @@ function homeScreen(state) {
   const joinRow = el("div", "", "join-row");
   joinRow.append(code, join);
   const form = el("div", "", "home-form");
+
+  // This tab was in a room before a refresh: offer to go back. It's the main
+  // button then, and Create becomes an ordinary one.
+  const roomCode = savedRoom();
+  if (roomCode !== null) {
+    const rejoin = button("Rejoin room " + roomCode, rejoinRoom, "primary");
+    rejoin.disabled = busy;
+    create.classList.remove("primary");
+    form.append(rejoin, el("p", "or start over", "divider"));
+  }
+
   form.append(name, create, el("p", "or join a friend's room", "divider"), joinRow);
 
   const elements = [el("h1", "Guess the Song"), form];
@@ -568,7 +690,13 @@ function lobbyScreen(state) {
     if (player.id === you) {
       tags.push("you");
     }
+    if (!player.connected) {
+      tags.push("reconnecting…");
+    }
     const row = el("li");
+    if (!player.connected) {
+      row.classList.add("away");
+    }
     row.append(playerLabel(state.room, player.id), el("span", tags.join(" · "), "tags"));
     list.append(row);
   }
@@ -1020,6 +1148,11 @@ function render(state) {
     case "RESULTS":
       elements = resultsScreen(state);
       break;
+  }
+  // Lost the connection mid-room: the screen stays as it was, with a banner
+  // across the top while connect() keeps trying (see connectionLost).
+  if (state.reconnecting) {
+    elements.unshift(el("p", "Connection lost. Reconnecting…", "banner")); // unshift: add at the front
   }
   const view = rememberView();
   app.className = layout;

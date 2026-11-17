@@ -171,6 +171,32 @@ input:disabled {
   gap: 10px;
 }
 
+/* A player whose connection is down: the room keeps their place for a few
+   minutes, so they're still listed, just faded. */
+.player-label.away {
+  opacity: 0.45;
+}
+
+/* ---------------------------------------------------------------------------
+   "Connection lost. Reconnecting…" (render() in script.js)
+   position: fixed pins it to the top of the window, out of the page's normal
+   layout: nothing below moves, and on the round screens it doesn't take a
+   cell in the grid. z-index puts it on top of whatever is under it.
+   --------------------------------------------------------------------------- */
+
+.banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  padding: 10px 16px;
+  background: var(--wrong);
+  color: var(--text);
+  font-weight: 700;
+  text-align: center;
+}
+
 /* ---------------------------------------------------------------------------
    Centred layout: HOME, LOBBY, LOADING, RESULTS
    Flexbox lines items up in one direction (here: a column), centred.

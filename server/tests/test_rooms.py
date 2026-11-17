@@ -1,7 +1,8 @@
 """Tests for the lobby's playlist menu (server/rooms.py).
 
 The functions tested here never send anything, so the players need no real
-WebSocket: None stands in for it.
+WebSocket: a plain object() stands in for each one. (Not None: a player whose
+websocket is None counts as disconnected, see test_reconnect.py.)
 """
 
 from types import SimpleNamespace
@@ -28,9 +29,9 @@ def empty_rooms():
 
 # A room with a host (Nick) and two other players.
 def lobby():
-    room, host = rooms.create_room("t1", "Nick", None)
-    _, alex = rooms.join_room(room.code, "t2", "Alex", None)
-    _, sam = rooms.join_room(room.code, "t3", "Sam", None)
+    room, host = rooms.create_room("t1", "Nick", object())
+    _, alex = rooms.join_room(room.code, "t2", "Alex", object())
+    _, sam = rooms.join_room(room.code, "t3", "Sam", object())
     return room, host, alex, sam
 
 
