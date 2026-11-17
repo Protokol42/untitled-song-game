@@ -127,6 +127,51 @@ input:disabled {
 }
 
 /* ---------------------------------------------------------------------------
+   Avatars: an emoji on a coloured circle (avatar() in script.js)
+   --------------------------------------------------------------------------- */
+
+/* inline-grid + place-items: center puts the emoji in the exact middle.
+   flex-shrink: 0 stops a flex row from squashing the circle into an oval. */
+.avatar {
+  display: inline-grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  flex-shrink: 0;
+  border-radius: 50%;
+  font-size: 1.1rem;
+  line-height: 1;
+  font-weight: 400; /* Don't inherit bold from the row it's in */
+}
+
+/* On the choice buttons at REVEAL. The ring in the page colour keeps
+   overlapping circles apart. */
+.avatar.small {
+  width: 1.6rem;
+  height: 1.6rem;
+  font-size: 0.9rem;
+  box-shadow: 0 0 0 2px var(--bg);
+}
+
+/* One colour per avatar, so players are easy to tell apart at a glance.
+   Darkish, so the emoji stands out on top. */
+.avatar-fox     { background: #c2410c; }
+.avatar-frog    { background: #15803d; }
+.avatar-octopus { background: #0e7490; }
+.avatar-panda   { background: #475569; }
+.avatar-lion    { background: #a16207; }
+.avatar-penguin { background: #1d4ed8; }
+.avatar-unicorn { background: #7e22ce; }
+.avatar-pig     { background: #be185d; }
+
+/* Avatar and name side by side, in the lobby, scores and results */
+.player-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* ---------------------------------------------------------------------------
    Centred layout: HOME, LOBBY, LOADING, RESULTS
    Flexbox lines items up in one direction (here: a column), centred.
    --------------------------------------------------------------------------- */
@@ -171,6 +216,7 @@ h1 {
 .results li {
   display: flex;
   justify-content: space-between; /* Title left, result right */
+  align-items: center;
   gap: 16px;
   padding: 12px 16px;
   background: var(--surface);
@@ -265,6 +311,7 @@ button.small {
 .lobby-players li {
   display: flex;
   justify-content: space-between;
+  align-items: center; /* Tags level with the name, not the avatar's top */
   padding: 12px 16px;
   background: var(--surface);
   border-radius: var(--radius);
@@ -275,6 +322,65 @@ button.small {
 .tags {
   color: var(--muted);
   font-weight: 400;
+}
+
+/* The avatar menu: all 8 in a row, wrapping on narrow phones. */
+.avatar-column {
+  align-items: center;
+}
+
+.avatar-menu {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* Each avatar is a button with just the circle inside: no button background
+   or padding, and a round outline instead of the usual rounded square. */
+.avatar-option {
+  padding: 3px;
+  background: none;
+  border-radius: 50%;
+  outline: 2px solid transparent; /* Reserved, so selecting doesn't shift things */
+}
+
+.avatar-option .avatar {
+  width: 2.75rem;
+  height: 2.75rem;
+  font-size: 1.5rem;
+}
+
+/* A free one: lights up under the mouse. (button:hover sets a background;
+   this one is round, so a ring instead.) */
+.avatar-option:hover:not(.mine):not(.taken) {
+  background: none;
+  outline-color: var(--muted);
+}
+
+/* Yours: the accent ring. */
+.avatar-option.mine {
+  outline-color: var(--accent);
+  cursor: default;
+}
+
+/* Someone else's: faded and grey, and the mouse doesn't turn into a hand.
+   The button still reacts visually to presses unless we stop it, so no
+   hover background and no shrink. */
+.avatar-option.taken {
+  opacity: 0.3;
+  filter: grayscale(1);
+  cursor: not-allowed;
+}
+
+.avatar-option.mine:hover,
+.avatar-option.taken:hover {
+  background: none;
+}
+
+.avatar-option.mine:active,
+.avatar-option.taken:active {
+  transform: none;
 }
 
 /* Players and playlists side by side. flex-wrap: wrap lets the second column
@@ -483,8 +589,40 @@ button.small {
 .players li {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   color: var(--muted);
+}
+
+/* Smaller avatars in the score sidebar, which is narrow */
+.players .avatar {
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 0.85rem;
+}
+
+.players .player-label {
+  gap: 8px;
+}
+
+/* Who has answered, under the message on the stage. Wraps if it's too wide. */
+.answered-strip {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+
+/* Still thinking: faded and grey. filter: grayscale removes the colour. */
+.answered-strip .avatar.waiting {
+  opacity: 0.35;
+  filter: grayscale(1);
+}
+
+/* Answered: full colour with a ring in the accent colour. It switches at
+   once; animating it would be step-4 polish. */
+.answered-strip .avatar.answered {
+  box-shadow: 0 0 0 2px var(--accent-text);
 }
 
 /* Your own row stands out, in the sidebar and on the results screen. */
@@ -526,7 +664,10 @@ button.small {
   gap: 12px;
 }
 
+/* position: relative makes the button the reference point for the
+   absolutely positioned .pick-stack inside it. */
 .choice {
+  position: relative;
   min-height: 4.5rem;
   font-size: 1.15rem;
   font-weight: 600;
@@ -565,6 +706,34 @@ button.small {
 .choice.wrong {
   opacity: 1;
   background: var(--wrong);
+}
+
+/* A choice someone picked (REVEAL). Not faded like the other disabled
+   choices: opacity on a button also fades everything inside it, and the
+   avatars should be clear. It keeps its normal grey background. */
+.choice.chosen {
+  opacity: 1;
+}
+
+/* The avatars of who picked this choice, in the button's top-right corner.
+   position: absolute takes it out of the button's normal layout, so the title
+   stays centred; top/right place it relative to the button (.choice is
+   position: relative). Negative margins make the circles overlap a little,
+   and with many pickers it wraps onto a second line, right-aligned. */
+.pick-stack {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  max-width: 60%;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  row-gap: 4px;
+  padding-left: 6px; /* Room for the first circle's negative margin */
+}
+
+.pick-stack .avatar {
+  margin-left: -6px;
 }
 
 /* ---------------------------------------------------------------------------

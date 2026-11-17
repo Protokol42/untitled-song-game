@@ -8,12 +8,15 @@
 //
 //   (no room) HOME → enter your name; create a room, or join one with its code
 //   LOBBY     → the code to share, who's in it, the playlist menu (everyone
-//               votes, the host chooses); the host can Start
+//               votes, the host chooses); the host can Start. Everyone has
+//               their own avatar (an animal), handed out by the server.
 //   LOADING   → the server is fetching songs
 //   COUNTDOWN → first round only: its clip loads; the choices are shown but
 //               not clickable
-//   PLAYING   → the clip plays; pick a title before time runs out
-//   REVEAL    → the answer, right or wrong, your points; the song plays on
+//   PLAYING   → the clip plays; pick a title before time runs out. Avatars
+//               light up as players answer (not WHAT they picked)
+//   REVEAL    → the answer, right or wrong, your points, and everyone's
+//               avatar on the choice they picked; the song plays on
 //               while the next round's clip downloads in the background
 //   RESULTS   → final scores and your rounds; the host goes back to the lobby
 //
@@ -167,6 +170,13 @@ function votePlaylist(playlistId) {
 function choosePlaylist(playlistId) {
   setState({ error: null });
   send({ type: "choose", playlist_id: playlistId });
+}
+
+// The avatar menu. Taken avatars can't be clicked, but someone could grab
+// the same free one a moment before us: then the server says so (an error).
+function pickAvatar(avatarId) {
+  setState({ error: null });
+  send({ type: "avatar", avatar: avatarId });
 }
 
 // Typing in the playlist search. Not a state change (see drafts), but the
@@ -447,11 +457,67 @@ function textInput(value, placeholder, maxLength, onInput, onEnter) {
   return input;
 }
 
-// A player's name from their public id. find() returns the first item for
-// which the function is true (or undefined if none is).
+// A player from their public id. find() returns the first item for which the
+// function is true, or undefined if none is (e.g. a player who has left but
+// still has a guess in this round).
+function playerById(room, id) {
+  return room.players.find((p) => p.id === id);
+}
+
 function playerName(room, id) {
-  const player = room.players.find((p) => p.id === id);
+  const player = playerById(room, id);
   return player ? player.name : "?";
+}
+
+// --- Avatars ---
+
+// What each avatar id from the server (server/avatars.py) looks like. For now
+// an emoji; its circle's colour is in style.css (.avatar-fox etc.). Swapping
+// these for pictures later only changes this file and style.css.
+const AVATAR_EMOJI = {
+  fox: "🦊",
+  frog: "🐸",
+  octopus: "🐙",
+  panda: "🐼",
+  lion: "🦁",
+  penguin: "🐧",
+  unicorn: "🦄",
+  pig: "🐷",
+};
+
+// One avatar per player, so this is also the room size. The server decides
+// (MAX_PLAYERS in rooms.py); this is only for the "3 / 8" in the lobby.
+const MAX_PLAYERS = Object.keys(AVATAR_EMOJI).length;
+
+// An avatar: a small coloured circle with its emoji. `label` is what pops up
+// when you hover over it (title) and what screen readers say (aria-label,
+// instead of "fox face"). `size` is an extra class for style.css ("small" on
+// the choice buttons).
+function avatarCircle(id, label, size = "") {
+  // ?? "?" in case the server sends an id this file doesn't know yet.
+  const circle = el("span", AVATAR_EMOJI[id] ?? "?", "avatar avatar-" + id);
+  if (size !== "") {
+    circle.classList.add(size);
+  }
+  circle.title = label;
+  circle.setAttribute("aria-label", label);
+  return circle;
+}
+
+// A player's avatar, labelled with their name.
+function avatar(player, size = "") {
+  return avatarCircle(player.avatar, player.name, size);
+}
+
+// An avatar and a name side by side, for lists of players.
+function playerLabel(room, id) {
+  const label = el("span", "", "player-label");
+  const player = playerById(room, id);
+  if (player) {
+    label.append(avatar(player));
+  }
+  label.append(el("span", playerName(room, id)));
+  return label;
 }
 
 // --- Centred screens ---
@@ -492,7 +558,7 @@ function homeScreen(state) {
 function lobbyScreen(state) {
   const { code, you, host, players } = state.room;
 
-  // One row per player: the name, then "host" and/or "you" in grey.
+  // One row per player: their avatar and name, then "host" and/or "you" in grey.
   const list = el("ul", "", "lobby-players");
   for (const player of players) {
     const tags = [];
@@ -503,7 +569,7 @@ function lobbyScreen(state) {
       tags.push("you");
     }
     const row = el("li");
-    row.append(el("span", player.name), el("span", tags.join(" · "), "tags"));
+    row.append(playerLabel(state.room, player.id), el("span", tags.join(" · "), "tags"));
     list.append(row);
   }
 
@@ -523,7 +589,7 @@ function lobbyScreen(state) {
   // Players and playlists side by side; on a narrow screen the playlists
   // wrap underneath (see .lobby-columns in style.css).
   const playersColumn = el("div", "", "lobby-column");
-  playersColumn.append(el("p", "Players · " + players.length, "label"), list);
+  playersColumn.append(el("p", "Players · " + players.length + " / " + MAX_PLAYERS, "label"), list);
   const columns = el("div", "", "lobby-columns");
   columns.append(playersColumn, playlistMenu(state.room));
 
@@ -531,6 +597,7 @@ function lobbyScreen(state) {
     el("p", "Room code", "label"),
     codeRow,
     el("p", "Share this code with your friends", "message"),
+    avatarMenu(state.room),
     columns,
     start,
     button("Leave room", leaveRoom),
@@ -539,6 +606,43 @@ function lobbyScreen(state) {
     elements.push(el("p", state.error, "error"));
   }
   return elements;
+}
+
+// Every avatar as a button: yours highlighted, other players' greyed out and
+// unclickable, the free ones clickable. The ORDER of the buttons is the
+// order in AVATAR_EMOJI, so they don't move around when someone switches.
+function avatarMenu(room) {
+  const row = el("div", "", "avatar-menu");
+  for (const id of Object.keys(AVATAR_EMOJI)) {
+    // Who has this one, if anyone (undefined if it's free).
+    const owner = room.players.find((p) => p.avatar === id);
+
+    let label = "Pick this one";
+    if (owner?.id === room.you) {
+      label = "You";
+    } else if (owner) {
+      label = "Taken by " + owner.name;
+    }
+
+    // Only a free avatar gets a click handler. Yours and taken ones are
+    // buttons that do nothing. Not `disabled`: some browsers then don't
+    // show the hover text, and "Taken by Alex" is the point. aria-disabled
+    // tells screen readers it can't be used instead.
+    let option;
+    if (owner) {
+      option = el("button", "", "avatar-option");
+      option.classList.add(owner.id === room.you ? "mine" : "taken");
+      option.setAttribute("aria-disabled", "true");
+    } else {
+      option = button("", () => pickAvatar(id), "avatar-option");
+    }
+    option.append(avatarCircle(id, label));
+    row.append(option);
+  }
+
+  const menu = el("div", "", "lobby-column avatar-column");
+  menu.append(el("p", "Your animal", "label"), row);
+  return menu;
 }
 
 // The lobby's playlist menu: a heading, the search box and a scrolling list.
@@ -664,7 +768,7 @@ function resultsScreen(state) {
     if (score.id === you) {
       row.classList.add("you");
     }
-    row.append(el("span", playerName(state.room, score.id)), el("span", String(score.points)));
+    row.append(playerLabel(state.room, score.id), el("span", String(score.points)));
     ranking.append(row);
   }
 
@@ -711,7 +815,38 @@ function countdownScreen(state) {
     choiceButton.disabled = true;
     return choiceButton;
   });
-  return roundLayout(state, [el("p", "Get ready…", "message")], timeBar(null, 0), buttons);
+  // The answered strip shows already (everyone still waiting), so the layout
+  // doesn't jump when PLAYING starts.
+  const stage = [el("p", "Get ready…", "message"), answeredStrip(state.room)];
+  return roundLayout(state, stage, timeBar(null, 0), buttons);
+}
+
+// Everyone's avatar in a row: lit up once they've answered, faded until then.
+// Only WHO has answered: what they picked waits for REVEAL (pickStack).
+function answeredStrip(room) {
+  const strip = el("div", "", "answered-strip");
+  for (const player of room.players) {
+    const circle = avatar(player);
+    const done = room.game.answered.includes(player.id);
+    circle.classList.add(done ? "answered" : "waiting");
+    strip.append(circle);
+  }
+  return strip;
+}
+
+// REVEAL: the avatars of everyone who picked this choice, in the order they
+// answered, for the button's top-right corner. null if nobody picked it.
+function pickStack(room, choiceId) {
+  const { answered, picks } = room.game;
+  const stack = el("span", "", "pick-stack");
+  for (const id of answered) {
+    const player = playerById(room, id);
+    // Skip players who have left since (their guess still counts on the server).
+    if (picks[id] === choiceId && player) {
+      stack.append(avatar(player, "small"));
+    }
+  }
+  return stack.childElementCount > 0 ? stack : null;
 }
 
 function playingScreen(state) {
@@ -732,6 +867,7 @@ function playingScreen(state) {
 
   const stage = [
     el("p", picked ? "Locked in! Waiting for the others…" : "Which song is this?", "message"),
+    answeredStrip(state.room),
   ];
   if (state.clipError) {
     stage.push(el("p", state.clipError, "error"));
@@ -754,7 +890,8 @@ function revealScreen(state) {
   }
 
   // The same buttons as while playing, but disabled and coloured in place:
-  // green for the answer, red for a wrong pick, the rest greyed out.
+  // green for the answer, red for a wrong pick, the rest greyed out. In the
+  // corner of each, the avatars of everyone who picked it (you included).
   const buttons = choices.map((choice) => {
     const choiceButton = el("button", choice.title, "choice");
     choiceButton.disabled = true;
@@ -762,6 +899,11 @@ function revealScreen(state) {
       choiceButton.classList.add("correct"); // classList adds a class to the ones it has
     } else if (choice.id === picked) {
       choiceButton.classList.add("wrong");
+    }
+    const stack = pickStack(state.room, choice.id);
+    if (stack !== null) {
+      choiceButton.classList.add("chosen"); // Not greyed out: see style.css
+      choiceButton.append(stack);
     }
     return choiceButton;
   });
@@ -811,7 +953,7 @@ function scoreSidebar(state) {
     if (score.id === you) {
       row.classList.add("you");
     }
-    row.append(el("span", playerName(state.room, score.id)), el("span", String(score.points)));
+    row.append(playerLabel(state.room, score.id), el("span", String(score.points)));
     list.append(row);
   }
   sidebar.append(el("h2", "Scores"), list);

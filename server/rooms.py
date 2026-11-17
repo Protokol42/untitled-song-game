@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from fastapi import WebSocket
 
 import deezer
+from avatars import AVATARS
 from game import Game, GameConfig, Phase, Round
 from playlists import PLAYLIST_IDS, PLAYLISTS
 from protocol import (
@@ -44,6 +45,11 @@ from tracks import Track
 CODE_LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"
 CODE_LENGTH = 4  # 24^4 ≈ 330,000 possible codes
 
+# One avatar each, all different, so a room holds as many players as there are
+# avatars. Worked out from the list rather than written as 8, so the two
+# numbers can never disagree.
+MAX_PLAYERS = len(AVATARS)
+
 
 # A problem the player should be told about, e.g. "No room with that code".
 # Raising it lets the functions below stop early; the /ws route catches it
@@ -60,6 +66,7 @@ class Player:
     id: str  # Public, shown to everyone
     token: str  # Secret, never sent to anyone (see protocol.py)
     name: str
+    avatar: str  # One of avatars.py's ids; no one else in the room has it
     websocket: WebSocket  # This player's connection, to send them messages
 
 
@@ -117,15 +124,27 @@ def new_code() -> str:
             return code
 
 
-def new_player(token: str, name: str, websocket: WebSocket) -> Player:
+def new_player(token: str, name: str, avatar: str, websocket: WebSocket) -> Player:
     # token_hex(4): 8 random hex characters like "a1b2c3d4". Only needs to be
     # unique within a room, so it can be short.
-    return Player(id=secrets.token_hex(4), token=token, name=name, websocket=websocket)
+    return Player(
+        id=secrets.token_hex(4), token=token, name=name, avatar=avatar, websocket=websocket
+    )
+
+
+# A random avatar that nobody in the room has yet. There's no separate "taken"
+# list to keep up to date: what's taken is simply what the players have, so
+# when someone leaves, their avatar is free again by itself.
+# (random, not secrets: there's nothing to guess or exploit here.)
+def free_avatar(room: Room) -> str:
+    taken = {player.avatar for player in room.players}  # A set: fast `in` checks
+    free = [avatar for avatar in AVATARS if avatar not in taken]
+    return random.choice(free)  # join_room checks the room isn't full first
 
 
 def create_room(token: str, name: str, websocket: WebSocket) -> tuple[Room, Player]:
     room = Room(code=new_code())
-    player = new_player(token, name, websocket)
+    player = new_player(token, name, free_avatar(room), websocket)
     room.players.append(player)
     open_rooms[room.code] = room
     return room, player
@@ -137,12 +156,33 @@ def join_room(code: str, token: str, name: str, websocket: WebSocket) -> tuple[R
         raise RoomError("No room with that code")
     if room.phase != "LOBBY":
         raise RoomError("That room is playing; join when it's back in the lobby")
+    if len(room.players) >= MAX_PLAYERS:
+        raise RoomError(f"That room is full ({MAX_PLAYERS} players)")
     # casefold() is lower() that also handles special cases like "ß" → "ss".
     if any(other.name.casefold() == name.casefold() for other in room.players):
         raise RoomError("Someone in that room already has that name")
-    player = new_player(token, name, websocket)
+    # No await between the full check and here (see the top of the file), so
+    # two people joining at the same moment can't both get the last avatar.
+    player = new_player(token, name, free_avatar(room), websocket)
     room.players.append(player)
     return room, player
+
+
+# Switch to another avatar, in the lobby. Like the name check in join_room,
+# "is it free?" and "take it" have no await between them, so if two players
+# click the same avatar at the same moment, the first gets it and the second
+# is told it's taken.
+def pick_avatar(room: Room, player: Player, avatar: str) -> None:
+    if room.phase != "LOBBY":
+        raise RoomError("Avatars can only be changed in the lobby")
+    # Browsers can send any text: only accept our own ids (see avatars.py).
+    if avatar not in AVATARS:
+        raise RoomError("Unknown avatar")
+    # `other is not player`: clicking the one you already have is fine (and
+    # changes nothing).
+    if any(other.avatar == avatar and other is not player for other in room.players):
+        raise RoomError("Someone already has that one")
+    player.avatar = avatar  # Your old one is free again by itself (free_avatar)
 
 
 def leave_room(room: Room, player: Player) -> None:
@@ -201,8 +241,8 @@ def start_game(room: Room, player: Player) -> None:
     room.task = asyncio.create_task(run_game(room))
 
 
-# True if the guess counted, so the caller knows to send the guesser their
-# updated view (their pick highlighted).
+# True if the guess counted, so the caller knows to tell everyone (the guesser
+# sees their pick highlighted; the others see that they've answered).
 def guess(room: Room, player: Player, track_id: int) -> bool:
     if room.game is None:
         return False
@@ -326,7 +366,17 @@ def game_state(game: Game, player_id: str) -> GameState:
         next_clip=next_clip,
         choices=[ChoiceInfo(id=track.id, title=track.title) for track in current.choices],
         picked=guess.track_id if guess else None,
+        # Who has answered: safe to show while the clip plays, since it doesn't
+        # say WHAT they picked. Dicts keep the order keys were added, so this
+        # is the order they answered in.
+        answered=list(current.guesses),
         # `X if condition else None`: only filled in once the round is revealed.
+        # What everyone picked, only now: during PLAYING it would let you copy.
+        picks=(
+            {guesser: their_guess.track_id for guesser, their_guess in current.guesses.items()}
+            if revealed
+            else None
+        ),
         answer=answer_info(current.answer) if revealed else None,
         points=(guess.points if guess else 0) if revealed else None,
         scores=[PlayerScore(id=player_id, points=points) for player_id, points in game.scores()],
@@ -357,7 +407,7 @@ def room_state(room: Room, player: Player) -> RoomState:
         code=room.code,
         you=player.id,
         host=room.host.id,
-        players=[PlayerInfo(id=p.id, name=p.name) for p in room.players],
+        players=[PlayerInfo(id=p.id, name=p.name, avatar=p.avatar) for p in room.players],
         playlists=playlist_menu(room),
         playlist=room.playlist_id,
         phase=room.phase,

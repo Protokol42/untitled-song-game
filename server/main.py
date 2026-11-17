@@ -5,6 +5,7 @@ happens in the other files:
     protocol.py the messages sent over the WebSocket
     rooms.py    who is in which room, running each room's game
     playlists.py the playlists players can choose from
+    avatars.py  the avatars players can have (one each)
     game.py     the rules of the game
 
 Run from the project root, with the virtual environment active:
@@ -29,6 +30,7 @@ from protocol import (
     JoinRoom,
     LeaveRoom,
     MakeGuess,
+    PickAvatar,
     StartGame,
     VotePlaylist,
     client_message,
@@ -109,6 +111,8 @@ async def game_socket(websocket: WebSocket) -> None:
                         continue
                     case VotePlaylist():
                         rooms.vote(room, player, message.playlist_id)
+                    case PickAvatar():
+                        rooms.pick_avatar(room, player, message.avatar)
                     case ChoosePlaylist():
                         rooms.choose_playlist(room, player, message.playlist_id)
                     case StartGame():
@@ -116,10 +120,11 @@ async def game_socket(websocket: WebSocket) -> None:
                     case BackToLobby():
                         rooms.back_to_lobby(room, player)
                     case MakeGuess():
-                        # Only the guesser hears about it now (their pick shown).
-                        # The others find out at REVEAL, so nobody can copy.
+                        # Everyone hears about it: the guesser sees their pick,
+                        # the others only see THAT they answered (game.answered).
+                        # What they picked waits for REVEAL, so nobody can copy.
                         if rooms.guess(room, player, message.track_id):
-                            await rooms.send_state(room, player)
+                            await rooms.broadcast(room)
                         continue
             except RoomError as error:
                 await rooms.send_error(websocket, str(error))

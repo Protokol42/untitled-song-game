@@ -61,6 +61,13 @@ class ChoosePlaylist(BaseModel):
     playlist_id: int
 
 
+# Anyone, in the lobby: switch to another avatar nobody has. avatar is an id
+# from avatars.py (rooms.py checks it's one of ours and that it's free).
+class PickAvatar(BaseModel):
+    type: Literal["avatar"]
+    avatar: str
+
+
 # Pick a title while the clip plays. track_id is one of the round's choices.
 class MakeGuess(BaseModel):
     type: Literal["guess"]
@@ -82,6 +89,7 @@ ClientMessage = Annotated[
     | LeaveRoom
     | VotePlaylist
     | ChoosePlaylist
+    | PickAvatar
     | StartGame
     | MakeGuess
     | BackToLobby,
@@ -105,6 +113,7 @@ client_message = TypeAdapter(ClientMessage)
 class PlayerInfo(BaseModel):
     id: str  # Public: safe for everyone in the room to see
     name: str
+    avatar: str  # An id from avatars.py; the browser decides how it looks
 
 
 # One row of the lobby's playlist menu.
@@ -148,7 +157,8 @@ class RoundResult(BaseModel):
 
 # The game, as ONE player may see it. The server builds a separate copy for
 # each player, and never puts in anything they shouldn't know yet: while the
-# clip plays there's no answer, no points and no one else's picks.
+# clip plays there's no answer, no points and no one else's picks (only who
+# has answered).
 class GameState(BaseModel):
     round: int  # 1 for the first round, ...
     rounds: int  # ... out of this many
@@ -161,6 +171,12 @@ class GameState(BaseModel):
     next_clip: ClipInfo | None
     choices: list[ChoiceInfo]
     picked: int | None  # The track YOU picked this round, if any
+    # Everyone who has answered this round (PlayerInfo ids, in answer order).
+    # Shown while the clip plays: it says WHO answered, never what.
+    answered: list[str]
+    # What everyone picked: PlayerInfo id → track id. None until REVEAL, so
+    # nobody can wait and copy a quicker player.
+    picks: dict[str, int] | None
     answer: AnswerInfo | None  # None until REVEAL
     points: int | None  # Your points for this round; None until REVEAL
     scores: list[PlayerScore]  # Revealed rounds only, highest first

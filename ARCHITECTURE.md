@@ -101,6 +101,16 @@ Built in roadmap step 3, part 2. Server code: `server/protocol.py` (messages), `
 - **The host is whoever joined first** (`players[0]`). When the host leaves, the next
   player becomes host without any extra code.
 - **Names** are 1–20 characters and unique within a room (ignoring case).
+- **Avatars:** each player gets a random avatar no one else in the room has, from
+  `server/avatars.py` (8 ids). The server only sends the id; `script.js` decides the look
+  (an animal emoji for now, colours in `style.css`), so pictures can replace them later
+  without touching the server. What's taken is just what the players have, so leaving
+  frees an avatar with no extra bookkeeping.
+- **Players can switch avatars in the lobby** (the `avatar` message): only to a free one.
+  Taken avatars show greyed out with who has them, and can't be clicked. No swapping, so
+  nobody can change someone else's avatar. If two players click the same free one at
+  once, the first gets it (no `await` between check and take) and the second gets an error.
+- **At most 8 players** (`MAX_PLAYERS = len(AVATARS)` in `rooms.py`): one avatar each.
 - **An empty room is deleted.**
 - **Disconnecting counts as leaving, for now.** Rejoining with the token is roadmap step 4.
 - **No locks needed:** asyncio only switches between connections at an `await`, and the
@@ -112,7 +122,7 @@ Built in roadmap step 3, part 2. Server code: `server/protocol.py` (messages), `
 
 | Direction | Message |
 |---|---|
-| Browser → server | `create` (token, name), `join` (token, name, code), `leave`, `vote` (playlist_id, in LOBBY), `choose` (playlist_id, host, in LOBBY), `start` (host, in LOBBY), `guess` (track_id), `lobby` (host, in RESULTS) |
+| Browser → server | `create` (token, name), `join` (token, name, code), `leave`, `vote` (playlist_id, in LOBBY), `choose` (playlist_id, host, in LOBBY), `avatar` (avatar, a free one, in LOBBY), `start` (host, in LOBBY), `guess` (track_id), `lobby` (host, in RESULTS) |
 | Server → browser | `room` (code, you, host, players, playlists, playlist, phase, game), `error` (message) |
 
 Invalid messages get an `error` reply; the connection stays open.
@@ -123,8 +133,11 @@ Invalid messages get an `error` reply; the connection stays open.
 - **`game`** is built separately for each player and only holds what that player may
   know: no answer, no round points and nobody else's picks until REVEAL. Scores only
   count revealed rounds, or a total going up would give away a right answer.
-- **A guess is only answered to the guesser** (their pick shown). Everyone else learns
-  about it at REVEAL.
+- **Who answered is live, what they picked waits.** Every guess is broadcast:
+  `game.answered` (player ids, in answer order) lights up their avatar for everyone
+  while the clip plays. `game.picks` (player id → track id) stays `None` until REVEAL,
+  then each player's avatar shows on the choice they picked. Showing picks live would
+  let players wait for the quickest one and copy.
 - **Each room's game runs as one asyncio task** (`run_game` in `rooms.py`): fetch fresh
   tracks, then COUNTDOWN (`countdown_seconds`, first round only, browsers load the clip)
   → PLAYING (until `clip_seconds` pass, or an `asyncio.Event` says everyone answered) →
@@ -258,7 +271,8 @@ so success is checked by the presence of `data`, not only the status code.
       audio is loaded on COUNTDOWN and played on PLAYING.
    6. Playtest on home wifi, then on Render
 
-   Done early from step 4: the lobby's playlist menu (see [Playlists](#playlists)).
+   Done early from step 4: the lobby's playlist menu (see [Playlists](#playlists)), and
+   avatars showing who answered and who picked what (see [Rooms](#rooms)).
 4. **Polish:** reconnection handling, host settings, animations, sound effects, deployment.
 
 ---
@@ -270,7 +284,7 @@ so success is checked by the presence of `data`, not only the status code.
 - **Before a public release:**
   - Review the Deezer and Apple API terms for public apps
   - Add rate limiting
-  - Cap room and player counts
+  - Cap the number of rooms (players per room are already capped at 8)
   - Filter display names
   - Choose a deployment target (e.g. a small VPS or Fly.io)
 - **Accounts and persistent stats:** only if wanted. Stable player IDs make them easier to add.

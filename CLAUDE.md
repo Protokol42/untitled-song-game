@@ -37,7 +37,8 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
     serves `client/`), `tracks.py` (`Track`), `deezer.py` (provider), `protocol.py`
     (WebSocket messages as Pydantic models), `rooms.py` (in-memory rooms, playlist votes, the
     per-room `run_game` task, each player's view, broadcast), `playlists.py` (the
-    playlist menu's list), `game.py` (the engine: `Game`,
+    playlist menu's list), `avatars.py` (the 8 avatar ids; also the room size limit),
+    `game.py` (the engine: `Game`,
     `Phase`, `score_for`). `deezer.py` raises its own `DeezerError`/`PlaylistNotFound`.
   - Client (`client/script.js`): one `state` object (mainly the server's latest `room`
     message), `setState`, `render(state)`. The screen follows `room.phase` (HOME when not
@@ -50,6 +51,11 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
     of Deezer playlists; everyone votes (`vote`), the host chooses (`choose`), the game
     uses `room.playlist_id`. The client filters by search and keeps focus/scroll across
     redraws (`rememberView`/`restoreView` in `render`).
+  - Avatars (also ahead of step 4): each player gets a unique animal (server picks,
+    client draws the emoji); rooms hold at most 8. In the lobby, players can switch to a
+    free one (`avatar` message, `pick_avatar`; taken ones are unclickable). While the clip plays everyone sees
+    who has answered (`game.answered`); at REVEAL, avatars sit on the choice each player
+    picked (`game.picks`).
   - Next: part 6, playtest on home wifi (`--host 0.0.0.0`), then on Render.
 - Collaboration: present the plan and wait for the owner's go-ahead before writing code
   or installing anything. Then Claude writes small, well-commented pieces; the owner
