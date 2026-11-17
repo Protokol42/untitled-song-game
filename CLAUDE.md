@@ -37,7 +37,8 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
     serves `client/`), `tracks.py` (`Track`), `deezer.py` (provider), `protocol.py`
     (WebSocket messages as Pydantic models), `rooms.py` (in-memory rooms, playlist votes, the
     per-room `run_game` task, each player's view, broadcast), `playlists.py` (the
-    playlist menu's list), `avatars.py` (the 8 avatar ids; also the room size limit),
+    playlist menu's list), `avatars.py` (the 8 avatar ids; also the room size limit), `settings.py` (host
+    settings: allowed values and defaults),
     `game.py` (the engine: `Game`,
     `Phase`, `score_for`). `deezer.py` raises its own `DeezerError`/`PlaylistNotFound`.
   - Client (`client/script.js`): one `state` object (mainly the server's latest `room`
@@ -64,6 +65,11 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
     auto-reconnect with backoff and a banner (`connected`/`connectionLost`), a
     "Rejoin room" button after a refresh (the click unlocks audio), clip and timer
     start `elapsed` seconds in, disconnected players faded.
+  - Host settings (step 4) are **done**: `settings.py` (allowed values: rounds 5–50 and
+    answer time 5–15 s in steps of 5, choices 2/4/6; defaults 10/10/4), `Room.settings`
+    (a `GameConfig`), `change_settings`, the `settings` message (only the changed
+    fields). Client: `settingsBox` in the lobby (sliders send on `change`). Tests in
+    `server/tests/test_settings.py`.
   - Next: part 6, playtest on home wifi (`--host 0.0.0.0`), then on Render.
 - Collaboration: present the plan and wait for the owner's go-ahead before writing code
   or installing anything. Then Claude writes small, well-commented pieces; the owner

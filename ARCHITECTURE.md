@@ -146,8 +146,8 @@ Built in roadmap step 3, part 2. Server code: `server/protocol.py` (messages), `
 
 | Direction | Message |
 |---|---|
-| Browser → server | `create` (token, name), `join` (token, name, code), `rejoin` (token, code, any phase), `leave`, `vote` (playlist_id, in LOBBY), `choose` (playlist_id, host, in LOBBY), `avatar` (avatar, a free one, in LOBBY), `start` (host, in LOBBY), `guess` (track_id), `lobby` (host, in RESULTS) |
-| Server → browser | `room` (code, you, host, players, playlists, playlist, phase, game), `error` (message) |
+| Browser → server | `create` (token, name), `join` (token, name, code), `rejoin` (token, code, any phase), `leave`, `vote` (playlist_id, in LOBBY), `choose` (playlist_id, host, in LOBBY), `avatar` (avatar, a free one, in LOBBY), `settings` (any of rounds, clip_seconds, choices; host, in LOBBY), `start` (host, in LOBBY), `guess` (track_id), `lobby` (host, in RESULTS) |
+| Server → browser | `room` (code, you, host, players, playlists, playlist, settings, setting_options, phase, game), `error` (message) |
 
 Invalid messages get an `error` reply; the connection stays open.
 
@@ -172,6 +172,23 @@ Invalid messages get an `error` reply; the connection stays open.
   element downloads it while the revealed song keeps playing. When PLAYING arrives,
   the main player loads the same link from the browser's cache. All clip starts are
   picked when the game is created, so the next one is known in advance.
+
+### Host settings
+
+- **The host sets rounds, answer time and choices in the lobby;** everyone else sees the
+  same controls, not usable. Rounds (5–50) and answer time (5–15 s) are sliders in steps of
+  5; choices are buttons (2, 4, 6). New rooms start at 10 rounds, 10 s, 4 choices.
+- **`server/settings.py` is the one list of allowed values and defaults.** The server
+  sends them as `setting_options`, and the browser draws its controls from them, so they
+  aren't repeated in `script.js`. `rooms.change_settings` refuses anything else.
+- **`Room.settings` is a `GameConfig`**, passed to `Game` by `run_game`, and kept after a
+  game like the playlist. Changes make a new one with `dataclasses.replace`.
+- **A `settings` message carries only what changed.** Sending all three every time
+  went wrong in testing: two quick changes (slider, then a button) were each built from
+  the settings before the other, so the second undid the first.
+- **Sliders send when let go** (`change`), not while dragging (`input`, which only
+  updates the number shown): every server reply redraws the screen, which would replace
+  the slider being dragged.
 
 ### Playlists
 
@@ -297,8 +314,8 @@ so success is checked by the presence of `data`, not only the status code.
 
    Done early from step 4: the lobby's playlist menu (see [Playlists](#playlists)), and
    avatars showing who answered and who picked what (see [Rooms](#rooms)).
-4. **Polish:** ✅ reconnection handling (see [Rooms](#rooms)), host settings, animations,
-   sound effects, deployment.
+4. **Polish:** ✅ reconnection handling (see [Rooms](#rooms)), ✅ host settings (see
+   [Host settings](#host-settings)), animations, sound effects, deployment.
 
 ---
 

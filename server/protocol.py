@@ -69,6 +69,19 @@ class ChoosePlaylist(BaseModel):
     playlist_id: int
 
 
+# Host only, in the lobby: change one or more of the next game's settings.
+# Only the ones being changed are sent; the rest are left out (None) and keep
+# their value. Sending all three every time would be a bug: two quick changes
+# (slider, then a button) would each be built from the settings BEFORE the
+# other, and the second would undo the first. rooms.py checks each value is
+# one that settings.py allows.
+class ChangeSettings(BaseModel):
+    type: Literal["settings"]
+    rounds: int | None = None
+    clip_seconds: int | None = None
+    choices: int | None = None
+
+
 # Anyone, in the lobby: switch to another avatar nobody has. avatar is an id
 # from avatars.py (rooms.py checks it's one of ours and that it's free).
 class PickAvatar(BaseModel):
@@ -98,6 +111,7 @@ ClientMessage = Annotated[
     | LeaveRoom
     | VotePlaylist
     | ChoosePlaylist
+    | ChangeSettings
     | PickAvatar
     | StartGame
     | MakeGuess
@@ -133,6 +147,29 @@ class PlaylistInfo(BaseModel):
     id: int
     name: str
     voters: list[str]  # PlayerInfo ids, in the order they voted
+
+
+# The next game's settings, as the host set them.
+class SettingsInfo(BaseModel):
+    rounds: int
+    clip_seconds: int
+    choices: int
+
+
+# A slider's allowed values: min, min + step, ... max (see settings.py).
+class RangeInfo(BaseModel):
+    min: int
+    max: int
+    step: int
+
+
+# What the host may pick from, so the browser can draw the sliders and buttons
+# without keeping its own copy of settings.py. The same in every message;
+# small enough that sending it every time costs nothing.
+class SettingOptions(BaseModel):
+    rounds: RangeInfo
+    clip_seconds: RangeInfo
+    choices: list[int]
 
 
 # A button: the title only. The artist would make it too easy.
@@ -207,6 +244,8 @@ class RoomState(BaseModel):
     players: list[PlayerInfo]  # In join order
     playlists: list[PlaylistInfo]  # Most votes first; ties in playlists.py order
     playlist: int  # The id of the playlist the host chose
+    settings: SettingsInfo  # The next game's settings (host's choice)
+    setting_options: SettingOptions  # What the host can choose from
     # LOBBY, LOADING (fetching songs), or the game's phase: COUNTDOWN, PLAYING,
     # REVEAL, RESULTS.
     phase: str

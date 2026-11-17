@@ -351,7 +351,12 @@ button.small {
 }
 
 /* The avatar menu: all 8 in a row, wrapping on narrow phones. */
-.avatar-column {
+/* Wider than the other lobby columns, so all 8 fit on one line on a computer
+   (8 × ~50px plus gaps); on a phone they still wrap. Two classes, so this
+   beats `.lobby-column { width: ... }` further down: with one class each,
+   the later rule would win. */
+.lobby-column.avatar-column {
+  width: min(32rem, 100%);
   align-items: center;
 }
 
@@ -407,6 +412,72 @@ button.small {
 .avatar-option.mine:active,
 .avatar-option.taken:active {
   transform: none;
+}
+
+/* The host's game settings, under the players. */
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 8px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  text-align: left;
+}
+
+.setting {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* The setting's name on the left, its value on the right */
+.setting-heading {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+
+.setting-value {
+  color: var(--accent-text);
+}
+
+/* The slider. accent-color colours the browser's own slider (the filled part
+   and the handle) without having to restyle it from scratch. */
+.setting input[type="range"] {
+  width: 100%;
+  padding: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Everyone but the host: visible, but clearly not for touching. */
+.setting input[type="range"]:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+/* Choices: equal-width buttons side by side. flex: 1 shares the width. */
+.setting-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.setting-buttons button {
+  flex: 1;
+  padding: 8px;
+  background: var(--surface-hover);
+}
+
+.setting-buttons button.selected {
+  background: var(--accent);
+  font-weight: 700;
+}
+
+/* Not the host: no hover effect; the selected one stays clearly visible. */
+.setting-buttons button:disabled:not(.selected) {
+  opacity: 0.6;
 }
 
 /* Players and playlists side by side. flex-wrap: wrap lets the second column
@@ -505,8 +576,19 @@ button.small {
   font-weight: 600;
 }
 
+/* The voters' avatars, in a row that wraps if it's long. */
 .playlist-voters {
-  font-size: 0.85rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+/* No ring here: the circles don't overlap (the ring is for the choice
+   buttons, where they do), and a ring in the page colour would look odd on
+   the row's background. */
+.playlist-voters .avatar {
+  box-shadow: none;
 }
 
 /* Labels above the vote count, right-aligned, never wrapping */

@@ -5,6 +5,7 @@ happens in the other files:
     protocol.py the messages sent over the WebSocket
     rooms.py    who is in which room, running each room's game
     playlists.py the playlists players can choose from
+    settings.py the host's game settings: allowed values and defaults
     avatars.py  the avatars players can have (one each)
     game.py     the rules of the game
 
@@ -26,6 +27,7 @@ import rooms
 from protocol import (
     CLOSE_REPLACED,
     BackToLobby,
+    ChangeSettings,
     ChoosePlaylist,
     CreateRoom,
     JoinRoom,
@@ -128,6 +130,10 @@ async def game_socket(websocket: WebSocket) -> None:
                         continue
                     case VotePlaylist():
                         rooms.vote(room, player, message.playlist_id)
+                    case ChangeSettings():
+                        rooms.change_settings(
+                            room, player, message.rounds, message.clip_seconds, message.choices
+                        )
                     case PickAvatar():
                         rooms.pick_avatar(room, player, message.avatar)
                     case ChoosePlaylist():

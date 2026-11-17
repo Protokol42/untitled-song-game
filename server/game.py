@@ -35,8 +35,9 @@ class Phase(StrEnum):
     RESULTS = "RESULTS"  # The game is over
 
 
-# The settings for one game. The defaults match the browser's CONFIG for now;
-# host settings (roadmap step 4) will create a GameConfig with other values.
+# The settings for one game. Rooms start from settings.py's defaults and the
+# host can change rounds, clip_seconds and choices in the lobby; the defaults
+# here are for tests and anything else that makes a Game directly.
 @dataclass
 class GameConfig:
     rounds: int = 20  # Songs per game (fewer if the playlist is smaller)

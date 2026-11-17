@@ -220,6 +220,15 @@ function searchPlaylists(text) {
   render(state);
 }
 
+// Host only (the server checks too). Sends only the setting that changed,
+// e.g. changeSettings({ rounds: 25 }); the server keeps the others. (Sending
+// all of them from state.room.settings would go wrong if the host changes two
+// quickly: the second would still carry the old value of the first.)
+function changeSettings(changes) {
+  setState({ error: null });
+  send({ type: "settings", ...changes });
+}
+
 // Host only (the server checks too).
 function startGame() {
   setState({ error: null });
@@ -717,7 +726,11 @@ function lobbyScreen(state) {
   // Players and playlists side by side; on a narrow screen the playlists
   // wrap underneath (see .lobby-columns in style.css).
   const playersColumn = el("div", "", "lobby-column");
-  playersColumn.append(el("p", "Players · " + players.length + " / " + MAX_PLAYERS, "label"), list);
+  playersColumn.append(
+    el("p", "Players · " + players.length + " / " + MAX_PLAYERS, "label"),
+    list,
+    settingsBox(state.room),
+  );
   const columns = el("div", "", "lobby-columns");
   columns.append(playersColumn, playlistMenu(state.room));
 
@@ -734,6 +747,80 @@ function lobbyScreen(state) {
     elements.push(el("p", state.error, "error"));
   }
   return elements;
+}
+
+// The next game's settings. The host changes them; everyone else sees the
+// same controls, not usable, so they know what's coming. What can be chosen
+// comes from the server (room.setting_options, from settings.py).
+function settingsBox(room) {
+  const isHost = room.you === room.host;
+  const { settings, setting_options: options } = room; // Renamed while unpacking
+
+  const box = el("div", "", "settings");
+  box.append(
+    el("p", isHost ? "Game settings" : "Game settings · set by the host", "label"),
+    settingSlider("Rounds", "", settings.rounds, options.rounds, isHost, (value) =>
+      changeSettings({ rounds: value }),
+    ),
+    settingSlider("Answer time", " s", settings.clip_seconds, options.clip_seconds, isHost, (value) =>
+      changeSettings({ clip_seconds: value }),
+    ),
+    choicesSetting(settings.choices, options.choices, isHost),
+  );
+  return box;
+}
+
+// One slider: its name and current value above, the slider below.
+// <input type="range"> is the browser's own slider; min, max and step decide
+// where it can stop (5, 10, 15 ...).
+function settingSlider(name, unit, value, range, isHost, onPick) {
+  const shown = el("span", value + unit, "setting-value");
+  const heading = el("div", "", "setting-heading");
+  heading.append(el("span", name), shown);
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.min = range.min;
+  slider.max = range.max;
+  slider.step = range.step;
+  slider.value = value;
+  slider.disabled = !isHost;
+  slider.setAttribute("aria-label", name);
+
+  // Two events: "input" fires on every step while dragging, "change" once
+  // when you let go. While dragging, only the number next to the name is
+  // updated, directly, without a redraw: redrawing would replace the slider
+  // you're holding. Letting go sends it to the server, whose answer redraws.
+  // slider.value is text ("25"); Number() makes it a number for the server.
+  slider.addEventListener("input", () => {
+    shown.textContent = slider.value + unit;
+  });
+  slider.addEventListener("change", () => onPick(Number(slider.value)));
+
+  const row = el("div", "", "setting");
+  row.append(heading, slider);
+  return row;
+}
+
+// Choices: only a few values, so buttons instead of a slider.
+function choicesSetting(current, allowed, isHost) {
+  const buttons = el("div", "", "setting-buttons");
+  for (const count of allowed) {
+    const option = isHost
+      ? button(String(count), () => changeSettings({ choices: count }))
+      : el("button", String(count));
+    option.disabled = !isHost;
+    if (count === current) {
+      option.classList.add("selected");
+    }
+    buttons.append(option);
+  }
+
+  const heading = el("div", "", "setting-heading");
+  heading.append(el("span", "Choices"));
+  const row = el("div", "", "setting");
+  row.append(heading, buttons);
+  return row;
 }
 
 // Every avatar as a button: yours highlighted, other players' greyed out and
@@ -829,9 +916,16 @@ function playlistRow(room, playlist, isHost) {
   const left = el("span", "", "playlist-text");
   left.append(el("span", playlist.name, "playlist-name"));
   if (playlist.voters.length > 0) {
-    // map() turns each voter id into a name; join puts commas between them.
-    const names = playlist.voters.map((id) => (id === room.you ? "you" : playerName(room, id)));
-    left.append(el("span", names.join(", "), "playlist-voters"));
+    // Who voted for it: their avatars, in the order they voted. Hovering one
+    // shows the name (avatar() sets it as the title).
+    const voters = el("span", "", "playlist-voters");
+    for (const id of playlist.voters) {
+      const voter = playerById(room, id);
+      if (voter) {
+        voters.append(avatar(voter, "small"));
+      }
+    }
+    left.append(voters);
   }
 
   const right = el("span", "", "playlist-side");

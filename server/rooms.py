@@ -25,13 +25,14 @@ import asyncio
 import random
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from fastapi import WebSocket
 
 import deezer
 from avatars import AVATARS
 from game import Game, GameConfig, Phase, Round
+import settings
 from playlists import PLAYLIST_IDS, PLAYLISTS
 from protocol import (
     AnswerInfo,
@@ -42,7 +43,10 @@ from protocol import (
     PlayerInfo,
     PlayerScore,
     PlaylistInfo,
+    RangeInfo,
     RoomState,
+    SettingOptions,
+    SettingsInfo,
     RoundResult,
 )
 from tracks import Track
@@ -102,6 +106,8 @@ class Room:
     # lobby comes back with the same playlist selected.
     votes: dict[str, int] = field(default_factory=dict)
     playlist_id: int = PLAYLISTS[0].id
+    # The next game's settings, set by the host. Also kept after a game.
+    settings: GameConfig = field(default_factory=settings.default_settings)
     game: Game | None = None  # None in the lobby
     # The background task running this room's game (run_game below), or None.
     # Keeping it here also matters for asyncio itself: it only keeps a weak
@@ -296,6 +302,48 @@ def choose_playlist(room: Room, player: Player, playlist_id: int) -> None:
 
 
 # ---------------------------------------------------------------------------
+# The host's game settings (allowed values in settings.py). No awaits.
+# ---------------------------------------------------------------------------
+
+# Each argument is a new value, or None to leave that setting as it is.
+def change_settings(
+    room: Room,
+    player: Player,
+    rounds: int | None = None,
+    clip_seconds: int | None = None,
+    choices: int | None = None,
+) -> None:
+    if player is not room.host:
+        raise RoomError("Only the host can change the settings")
+    if room.phase != "LOBBY":
+        raise RoomError("Settings can only be changed in the lobby")
+
+    # Collect the changes in a dict (setting name → new value), checking
+    # each one: browsers can send any number, so only accept the ones
+    # settings.py allows. Nothing is changed until all of them pass.
+    changes = {}
+    if rounds is not None:
+        if not settings.ROUNDS.allows(rounds):
+            raise RoomError("Not an allowed number of rounds")
+        changes["rounds"] = rounds
+    if clip_seconds is not None:
+        if not settings.CLIP_SECONDS.allows(clip_seconds):
+            raise RoomError("Not an allowed answer time")
+        changes["clip_seconds"] = clip_seconds
+    if choices is not None:
+        if choices not in settings.CHOICES:
+            raise RoomError("Not an allowed number of choices")
+        changes["choices"] = choices
+
+    # replace() makes a NEW GameConfig with these fields changed and the rest
+    # copied. **changes passes the dict as keyword arguments, so
+    # {"rounds": 25} becomes replace(room.settings, rounds=25). A new object
+    # rather than changing the old one, so a game that's holding on to the
+    # old one is never changed under its feet.
+    room.settings = replace(room.settings, **changes)
+
+
+# ---------------------------------------------------------------------------
 # Playing: the messages from the browser that drive a game.
 # ---------------------------------------------------------------------------
 
@@ -350,7 +398,7 @@ async def run_game(room: Room) -> None:
         tracks = await deezer.get_playlist_tracks(room.playlist_id)
         player_ids = [player.id for player in room.players]
         # random.Random() with no seed: different every game. (Tests pass a seed.)
-        room.game = Game(tracks, player_ids, GameConfig(), random.Random())
+        room.game = Game(tracks, player_ids, room.settings, random.Random())
     except (deezer.DeezerError, ValueError) as error:
         # ValueError: Game() refuses a playlist with fewer than 2 playable songs.
         room.task = None  # Back to the LOBBY phase
@@ -462,6 +510,19 @@ def game_state(game: Game, player_id: str, now: float) -> GameState:
     )
 
 
+# What the host can pick from (settings.py), in the form the browser gets.
+# Never changes, so it's built once when the server starts.
+def range_info(allowed: settings.Range) -> RangeInfo:
+    return RangeInfo(min=allowed.min, max=allowed.max, step=allowed.step)
+
+
+SETTING_OPTIONS = SettingOptions(
+    rounds=range_info(settings.ROUNDS),
+    clip_seconds=range_info(settings.CLIP_SECONDS),
+    choices=settings.CHOICES,
+)
+
+
 # The playlist menu: every playlist with who voted for it, most votes first.
 def playlist_menu(room: Room) -> list[PlaylistInfo]:
     # Dicts remember the order keys were added, so voters come out in the
@@ -491,6 +552,14 @@ def room_state(room: Room, player: Player) -> RoomState:
         ],
         playlists=playlist_menu(room),
         playlist=room.playlist_id,
+        settings=SettingsInfo(
+            rounds=room.settings.rounds,
+            # int(): GameConfig keeps seconds as a float (10.0); the browser
+            # compares it with whole numbers from the slider.
+            clip_seconds=int(room.settings.clip_seconds),
+            choices=room.settings.choices,
+        ),
+        setting_options=SETTING_OPTIONS,
         phase=room.phase,
         game=(
             game_state(room.game, player.id, now=time.monotonic())
