@@ -291,6 +291,14 @@ h1 {
 
 /* --- LOBBY --- */
 
+/* The game's name at the top of the lobby: the home screen's title, smaller
+   (the room code is the big thing on this screen), with a little room below
+   so it reads as a header rather than part of the room code. */
+.lobby-title {
+  font-size: 1.5rem;
+  margin-bottom: 8px;
+}
+
 /* Small grey headings, like the score sidebar's */
 .label {
   font-size: 0.8rem;

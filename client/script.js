@@ -735,6 +735,9 @@ function lobbyScreen(state) {
   columns.append(playersColumn, playlistMenu(state.room));
 
   const elements = [
+    // The game's name, smaller than on the home screen: the room code below
+    // is what players need to read, so it stays the biggest thing here.
+    el("h1", "Guess the Song", "lobby-title"),
     el("p", "Room code", "label"),
     codeRow,
     el("p", "Share this code with your friends", "message"),
