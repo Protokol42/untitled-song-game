@@ -249,3 +249,21 @@ class Game:
         # sorted() by the points (item[1]), biggest first. Python's sort keeps
         # the original order for ties, so equal scores stay in join order.
         return sorted(totals.items(), key=lambda item: item[1], reverse=True)
+
+    # Each player's streak: how many rounds in a row they've answered right,
+    # counting back from the latest revealed round. {player_id: streak}.
+    # A wrong answer or no answer ends it. Like scores(), only revealed rounds
+    # count (a streak going up the moment you answer would give it away), and
+    # it's computed from the rounds rather than stored.
+    def streaks(self) -> dict[str, int]:
+        result = {}
+        for player_id in self.player_ids:
+            streak = 0
+            # reversed(): newest round first, so we can stop at the first miss.
+            for played in reversed(self.revealed_rounds()):
+                guess = played.guesses.get(player_id)  # None if they didn't answer
+                if guess is None or guess.track_id != played.answer.id:
+                    break  # The streak ends here
+                streak += 1
+            result[player_id] = streak
+        return result

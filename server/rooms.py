@@ -482,6 +482,8 @@ def game_state(game: Game, player_id: str, now: float) -> GameState:
         track, clip_start = upcoming  # Unpack the (track, start) pair
         next_clip = ClipInfo(preview_url=track.preview_url, clip_start=clip_start)
 
+    streaks = game.streaks()  # Once, not once per player in the list below
+
     return GameState(
         round=current.number,
         rounds=len(game.answers),
@@ -505,7 +507,10 @@ def game_state(game: Game, player_id: str, now: float) -> GameState:
         elapsed=elapsed,
         answer=answer_info(current.answer) if revealed else None,
         points=(guess.points if guess else 0) if revealed else None,
-        scores=[PlayerScore(id=player_id, points=points) for player_id, points in game.scores()],
+        scores=[
+            PlayerScore(id=scorer, points=points, streak=streaks[scorer])
+            for scorer, points in game.scores()
+        ],
         history=[round_result(played, player_id) for played in game.revealed_rounds()],
     )
 

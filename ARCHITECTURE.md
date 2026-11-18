@@ -220,6 +220,12 @@ Invalid messages get an `error` reply; the connection stays open.
   answers, which would need fuzzy matching.
 - **Scoring (starting point):** `correct ? max(100, 1000 × (1 − elapsed / clipSeconds)) : 0`,
   so a late correct answer still earns something. To be tuned during playtesting.
+- **Streaks:** right answers in a row, counted back from the latest revealed round; a wrong
+  answer or no answer resets it. `Game.streaks()` computes it from the rounds (like
+  `scores()`), and only from revealed ones, or a streak going up the moment you answer
+  would give your answer away. Each `PlayerScore` carries the real `streak`; the browser
+  shows a "🔥 7" badge after the points from `STREAK_MIN` (5) up, in the score sidebar and
+  the final results. No points bonus: it's only shown.
 - **Round length = clip length:** you answer while the clip plays; when it ends, time's up.
   The server's clock starts when it sends PLAYING, and the answer buttons are disabled
   until that arrives.

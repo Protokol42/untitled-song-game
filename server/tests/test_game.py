@@ -277,3 +277,59 @@ def test_players_who_left_drop_off_the_scores():
     game = new_game(players=("p1", "p2"))
     game.remove_player("p2")
     assert game.scores() == [("p1", 0)]
+
+
+# ---------------------------------------------------------------------------
+# Streaks
+# ---------------------------------------------------------------------------
+
+# Play one whole round: each player in `answers` answers "right", "wrong" or
+# None (doesn't answer), then the round is revealed and the next one dealt.
+def play_round(game: Game, answers: dict) -> None:
+    game.start_round(now=0)
+    for player_id, answer in answers.items():
+        if answer == "right":
+            game.guess(player_id, right_answer(game), now=0)
+        elif answer == "wrong":
+            game.guess(player_id, wrong_answer(game), now=0)
+    game.time_up()  # Ignored if everyone answered (already REVEAL)
+    game.next_round()
+
+
+def test_a_streak_counts_right_answers_in_a_row():
+    game = new_game(players=("p1",))
+    for _ in range(3):
+        play_round(game, {"p1": "right"})
+    assert game.streaks() == {"p1": 3}
+
+
+def test_a_wrong_answer_ends_the_streak():
+    game = new_game(players=("p1",))
+    for answer in ["right", "right", "wrong", "right"]:
+        play_round(game, {"p1": answer})
+    assert game.streaks() == {"p1": 1}  # Only the one after the wrong answer
+
+
+def test_not_answering_ends_the_streak():
+    game = new_game(players=("p1", "p2"))
+    play_round(game, {"p1": "right", "p2": "right"})
+    play_round(game, {"p1": None, "p2": "right"})  # p1 runs out of time
+    assert game.streaks() == {"p1": 0, "p2": 2}
+
+
+def test_streaks_ignore_the_current_round_until_it_is_revealed():
+    # Two players, so p1 answering doesn't end the round: p2 is still thinking.
+    game = new_game(players=("p1", "p2"))
+    play_round(game, {"p1": "right", "p2": "right"})
+    game.start_round(now=0)
+    game.guess("p1", right_answer(game), now=0)
+    assert game.streaks()["p1"] == 1  # 2 would give away that p1 was right
+    game.time_up()
+    assert game.streaks()["p1"] == 2
+
+
+def test_players_who_left_have_no_streak():
+    game = new_game(players=("p1", "p2"))
+    play_round(game, {"p1": "right", "p2": "right"})
+    game.remove_player("p2")
+    assert game.streaks() == {"p1": 1}

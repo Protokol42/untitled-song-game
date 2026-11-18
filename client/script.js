@@ -58,7 +58,11 @@ let copiedTimer = null;
 // cleared). `??` means "if the left side is null, use the right side":
 // getItem gives null the first time.
 // `search` is what's typed into the lobby's playlist search.
-const drafts = { name: localStorage.getItem("name") ?? "", code: "", search: "" };
+const drafts = {
+  name: localStorage.getItem("name") ?? "",
+  code: "",
+  search: "",
+};
 
 // The ONLY way to change state. Because every change goes through here, the
 // screen is redrawn every time and can never show something out of date.
@@ -376,7 +380,12 @@ function receiveRoom(room) {
 
   // In a room (again): remember its code, so a refresh can offer to rejoin.
   rememberRoom(room.code);
-  const changes = { room: room, joining: false, rejoining: false, reconnecting: false };
+  const changes = {
+    room: room,
+    joining: false,
+    rejoining: false,
+    reconnecting: false,
+  };
 
   // The audio follows the game, but only when it moves on to a new step: not
   // on an update within one (like our own pick being confirmed), or the clip
@@ -437,7 +446,9 @@ function playerToken() {
     // phone testing on your wifi opens http://192.168.x.x.
     // toString(16) writes a number in hex; padStart makes 5 into "05".
     const bytes = crypto.getRandomValues(new Uint8Array(16));
-    token = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    token = Array.from(bytes, (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
     sessionStorage.setItem("token", token);
   }
   return token;
@@ -648,13 +659,25 @@ function homeScreen(state) {
   const busy = !state.connected || state.joining;
 
   // The arrow functions save what's typed into `drafts` (see the top of the file).
-  const name = textInput(drafts.name, "Your name", 20, (text) => {
-    drafts.name = text;
-  }, createRoom);
+  const name = textInput(
+    drafts.name,
+    "Your name",
+    20,
+    (text) => {
+      drafts.name = text;
+    },
+    createRoom,
+  );
   const create = button("Create room", createRoom, "primary");
-  const code = textInput(drafts.code, "Code", 4, (text) => {
-    drafts.code = text;
-  }, joinRoom);
+  const code = textInput(
+    drafts.code,
+    "Code",
+    4,
+    (text) => {
+      drafts.code = text;
+    },
+    joinRoom,
+  );
   code.classList.add("code-input");
   const join = button("Join", joinRoom);
   for (const element of [name, create, code, join]) {
@@ -675,7 +698,12 @@ function homeScreen(state) {
     form.append(rejoin, el("p", "or start over", "divider"));
   }
 
-  form.append(name, create, el("p", "or join a friend's room", "divider"), joinRow);
+  form.append(
+    name,
+    create,
+    el("p", "or join a friend's room", "divider"),
+    joinRow,
+  );
 
   const elements = [el("h1", "Guess the Song"), form];
   if (state.error) {
@@ -706,7 +734,10 @@ function lobbyScreen(state) {
     if (!player.connected) {
       row.classList.add("away");
     }
-    row.append(playerLabel(state.room, player.id), el("span", tags.join(" · "), "tags"));
+    row.append(
+      playerLabel(state.room, player.id),
+      el("span", tags.join(" · "), "tags"),
+    );
     list.append(row);
   }
 
@@ -761,12 +792,26 @@ function settingsBox(room) {
 
   const box = el("div", "", "settings");
   box.append(
-    el("p", isHost ? "Game settings" : "Game settings · set by the host", "label"),
-    settingSlider("Rounds", "", settings.rounds, options.rounds, isHost, (value) =>
-      changeSettings({ rounds: value }),
+    el(
+      "p",
+      isHost ? "Game settings" : "Game settings · set by the host",
+      "label",
     ),
-    settingSlider("Answer time", " s", settings.clip_seconds, options.clip_seconds, isHost, (value) =>
-      changeSettings({ clip_seconds: value }),
+    settingSlider(
+      "Rounds",
+      "",
+      settings.rounds,
+      options.rounds,
+      isHost,
+      (value) => changeSettings({ rounds: value }),
+    ),
+    settingSlider(
+      "Answer time",
+      " s",
+      settings.clip_seconds,
+      options.clip_seconds,
+      isHost,
+      (value) => changeSettings({ clip_seconds: value }),
     ),
     choicesSetting(settings.choices, options.choices, isHost),
   );
@@ -869,7 +914,13 @@ function avatarMenu(room) {
 function playlistMenu(room) {
   const isHost = room.you === room.host;
 
-  const search = textInput(drafts.search, "Search playlists", 40, searchPlaylists, () => {});
+  const search = textInput(
+    drafts.search,
+    "Search playlists",
+    40,
+    searchPlaylists,
+    () => {},
+  );
   search.type = "search"; // Adds a ✕ to clear it, and a search key on phone keyboards
   search.id = "playlist-search"; // An id, so render() can keep it focused (rememberView)
   search.setAttribute("aria-label", "Search playlists"); // A name for screen readers
@@ -890,13 +941,25 @@ function playlistMenu(room) {
   const column = el("div", "", "lobby-column playlist-column");
   column.append(
     el("p", "Playlists · " + room.playlists.length, "label"),
-    el("p", isHost ? "Most votes on top. Tap one to play it." : "Most votes on top. Tap one to vote.", "hint"),
+    el(
+      "p",
+      isHost
+        ? "Most votes on top. Tap one to play it."
+        : "Most votes on top. Tap one to vote.",
+      "hint",
+    ),
     selectedBox(room, isHost),
     search,
     list,
   );
   if (query !== "") {
-    const count = shown.length + " of " + room.playlists.length + ' match "' + drafts.search.trim() + '"';
+    const count =
+      shown.length +
+      " of " +
+      room.playlists.length +
+      ' match "' +
+      drafts.search.trim() +
+      '"';
     column.append(el("p", count, "hint"));
   }
   return column;
@@ -933,7 +996,9 @@ function playlistRow(room, playlist, isHost) {
 
   const right = el("span", "", "playlist-side");
   if (selected) {
-    right.append(el("span", isHost ? "Selected" : "Host's pick", "playlist-tag selected"));
+    right.append(
+      el("span", isHost ? "Selected" : "Host's pick", "playlist-tag selected"),
+    );
   }
   if (yourVote) {
     right.append(el("span", "Your vote", "playlist-tag"));
@@ -993,7 +1058,7 @@ function resultsScreen(state) {
     if (score.id === you) {
       row.classList.add("you");
     }
-    row.append(playerLabel(state.room, score.id), el("span", String(score.points)));
+    row.append(playerLabel(state.room, score.id), pointsAndStreak(score));
     ranking.append(row);
   }
 
@@ -1009,7 +1074,10 @@ function resultsScreen(state) {
       text = "✗ wrong";
     }
     const row = el("li");
-    row.append(el("span", result.answer.title + " — " + result.answer.artist), el("span", text));
+    row.append(
+      el("span", result.answer.title + " — " + result.answer.artist),
+      el("span", text),
+    );
     rounds.append(row);
   }
 
@@ -1082,7 +1150,11 @@ function playingScreen(state) {
   // much away; it's revealed afterwards). After you pick, they're all disabled
   // and yours is highlighted. Whether you were right waits for REVEAL.
   const buttons = game.choices.map((choice) => {
-    const choiceButton = button(choice.title, () => pickChoice(choice.id), "choice");
+    const choiceButton = button(
+      choice.title,
+      () => pickChoice(choice.id),
+      "choice",
+    );
     choiceButton.disabled = picked;
     if (choice.id === game.picked) {
       choiceButton.classList.add("picked");
@@ -1091,13 +1163,22 @@ function playingScreen(state) {
   });
 
   const stage = [
-    el("p", picked ? "Locked in! Waiting for the others…" : "Which song is this?", "message"),
+    el(
+      "p",
+      picked ? "Locked in! Waiting for the others…" : "Which song is this?",
+      "message",
+    ),
     answeredStrip(state.room),
   ];
   if (state.clipError) {
     stage.push(el("p", state.clipError, "error"));
   }
-  return roundLayout(state, stage, timeBar(state.playingSince, game.clip_seconds), buttons);
+  return roundLayout(
+    state,
+    stage,
+    timeBar(state.playingSince, game.clip_seconds),
+    buttons,
+  );
 }
 
 function revealScreen(state) {
@@ -1156,7 +1237,10 @@ function revealScreen(state) {
 function roundLayout(state, stageItems, bar, buttons) {
   const game = state.room.game;
   const stage = el("div", "", "stage");
-  stage.append(el("p", "Round " + game.round + " / " + game.rounds, "round-counter"), ...stageItems);
+  stage.append(
+    el("p", "Round " + game.round + " / " + game.rounds, "round-counter"),
+    ...stageItems,
+  );
 
   const choices = el("div", "", "choices");
   choices.append(...buttons);
@@ -1165,6 +1249,25 @@ function roundLayout(state, stageItems, bar, buttons) {
   bottom.append(bar, choices);
 
   return [stage, scoreSidebar(state), bottom];
+}
+
+// A streak is shown from this many right answers in a row. The server always
+// sends the real number (score.streak); this is the one place that decides
+// when it's worth a 🔥.
+const STREAK_MIN = 4;
+
+// A player's points, then their streak as a small "🔥 7" badge if it's long
+// enough: the right-hand side of a row in the score sidebar and the results.
+// Like the points, streaks only change at REVEAL.
+function pointsAndStreak(score) {
+  const side = el("span", "", "points-side");
+  side.append(el("span", String(score.points)));
+  if (score.streak >= STREAK_MIN) {
+    const badge = el("span", "🔥 " + score.streak, "streak");
+    badge.title = score.streak + " right in a row"; // Shown on hover
+    side.append(badge);
+  }
+  return side;
 }
 
 // Every player's total, highest first (the server sorts them). Totals only
@@ -1178,7 +1281,7 @@ function scoreSidebar(state) {
     if (score.id === you) {
       row.classList.add("you");
     }
-    row.append(playerLabel(state.room, score.id), el("span", String(score.points)));
+    row.append(playerLabel(state.room, score.id), pointsAndStreak(score));
     list.append(row);
   }
   sidebar.append(el("h2", "Scores"), list);
@@ -1290,7 +1393,8 @@ function restoreView(view) {
     }
   }
   // focusedId is "" when the focused element had no id (or nothing had focus).
-  const focused = view.focusedId === "" ? null : document.getElementById(view.focusedId);
+  const focused =
+    view.focusedId === "" ? null : document.getElementById(view.focusedId);
   if (focused !== null) {
     focused.focus({ preventScroll: true }); // Don't scroll the page to it
     if (view.cursor !== null) {

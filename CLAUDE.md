@@ -70,6 +70,8 @@ decisions, music-source findings and roadmap. Keep it up to date when decisions 
     (a `GameConfig`), `change_settings`, the `settings` message (only the changed
     fields). Client: `settingsBox` in the lobby (sliders send on `change`). Tests in
     `server/tests/test_settings.py`.
+  - Streaks: `Game.streaks()` (right answers in a row, revealed rounds only),
+    `PlayerScore.streak`; the client shows "🔥 n" after the points from `STREAK_MIN` (5).
   - Next: part 6, playtest on home wifi (`--host 0.0.0.0`), then on Render.
 - Collaboration: present the plan and wait for the owner's go-ahead before writing code
   or installing anything. Then Claude writes small, well-commented pieces; the owner

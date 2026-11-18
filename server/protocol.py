@@ -194,6 +194,9 @@ class ClipInfo(BaseModel):
 class PlayerScore(BaseModel):
     id: str  # A PlayerInfo id
     points: int
+    # Right answers in a row, up to the latest revealed round (0 after a miss).
+    # Always the real number; the browser decides when it's worth a 🔥.
+    streak: int
 
 
 # One finished round, as seen by you (for the results screen).

@@ -710,6 +710,27 @@ button.small {
   color: var(--muted);
 }
 
+/* Points, then the streak badge after them (pointsAndStreak in script.js),
+   kept together on one line. */
+.points-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+/* "🔥 7": a small pill with an orange tint, to stand out without competing
+   with the points. rgba(r, g, b, alpha): a colour with see-through-ness, so
+   the background behind shows a little. */
+.streak {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: rgba(249, 115, 22, 0.18);
+  color: #fdba74;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
 /* Smaller avatars in the score sidebar, which is narrow */
 .players .avatar {
   width: 1.5rem;
